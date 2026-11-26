@@ -1,5 +1,5 @@
 import { cursorPosition, getCurrentWindow } from "@tauri-apps/api/window";
-import { Goose, GOOSE_SIZE } from "./goose";
+import { Goose, GOOSE_SIZE, SPRITE_OFFSET_Y } from "./goose";
 import { GooseRenderer } from "./goose-renderer";
 import { playSoundEffect } from "./quack-audio";
 
@@ -33,6 +33,7 @@ interface PointerGesture {
   grabOffsetX: number;
   grabOffsetY: number;
   moved: boolean;
+  samples: Array<{ x: number; y: number; time: number }>;
 }
 
 let canvasWidth = 0;
@@ -78,6 +79,45 @@ function findGooseAt(x: number, y: number): Goose | undefined {
   );
 }
 
+function addPointerSample(
+  gesture: PointerGesture,
+  position: { x: number; y: number },
+): void {
+  const time = performance.now();
+  gesture.samples.push({ ...position, time });
+  const cutoff = time - 120;
+  while (gesture.samples.length > 2 && gesture.samples[1].time < cutoff) {
+    gesture.samples.shift();
+  }
+}
+
+function getThrowVelocity(
+  gesture: PointerGesture,
+  position: { x: number; y: number },
+): { x: number; y: number } {
+  addPointerSample(gesture, position);
+  const last = gesture.samples[gesture.samples.length - 1];
+  const first =
+    gesture.samples.find(
+      (sample) =>
+        sample.time >= last.time - 120 && last.time - sample.time >= 30,
+    ) ??
+    gesture.samples.find(
+      (sample) =>
+        sample.time >= last.time - 120 && last.time - sample.time >= 8,
+    ) ??
+    last;
+  const elapsedSeconds = (last.time - first.time) / 1000;
+  if (elapsedSeconds === 0) {
+    return { x: 0, y: 0 };
+  }
+
+  return {
+    x: (last.x - first.x) / elapsedSeconds,
+    y: (last.y - first.y) / elapsedSeconds,
+  };
+}
+
 async function setCursorEventsIgnored(ignore: boolean): Promise<void> {
   if (ignore === cursorEventsIgnored) {
     return;
@@ -104,9 +144,12 @@ function handleGooseClick(goose: Goose): void {
     return;
   }
 
-  playerGoose.attack(otherGoose);
+  const attackLanded = playerGoose.attack(otherGoose);
   otherGoose.prepareForAttack(playerGoose);
   playEffect("surprised");
+  if (attackLanded) {
+    playEffect("attacked");
+  }
 }
 
 function animate(now: number): void {
@@ -191,9 +234,11 @@ petCanvas.addEventListener("pointerdown", (event) => {
     startX: pointer.x,
     startY: pointer.y,
     grabOffsetX: pointer.x - goose.x,
-    grabOffsetY: pointer.y - goose.y,
+    grabOffsetY: pointer.y - goose.y - SPRITE_OFFSET_Y,
     moved: false,
+    samples: [],
   };
+  addPointerSample(pointerGesture, pointer);
   petCanvas.setPointerCapture(event.pointerId);
   event.preventDefault();
   void setCursorEventsIgnored(false);
@@ -206,6 +251,7 @@ petCanvas.addEventListener("pointermove", (event) => {
   }
 
   const pointer = pointerPositionInCanvas(event);
+  addPointerSample(gesture, pointer);
   if (
     !gesture.moved &&
     Math.hypot(pointer.x - gesture.startX, pointer.y - gesture.startY) >=
@@ -225,7 +271,7 @@ petCanvas.addEventListener("pointermove", (event) => {
     maxX,
   );
   gesture.goose.y = Math.min(
-    Math.max(0, pointer.y - gesture.grabOffsetY),
+    Math.max(0, pointer.y - gesture.grabOffsetY - SPRITE_OFFSET_Y),
     maxY,
   );
   gesture.goose.velocityY = 0;
@@ -238,7 +284,13 @@ function finishPointerGesture(event: PointerEvent, cancelled: boolean): void {
   }
 
   pointerGesture = null;
-  if (!gesture.moved && !cancelled) {
+  if (gesture.moved) {
+    const pointer = pointerPositionInCanvas(event);
+    const velocity = cancelled
+      ? { x: 0, y: 0 }
+      : getThrowVelocity(gesture, pointer);
+    gesture.goose.releaseFromDrag(velocity.x, velocity.y);
+  } else if (!cancelled) {
     handleGooseClick(gesture.goose);
   }
   if (petCanvas.hasPointerCapture(event.pointerId)) {
@@ -250,6 +302,9 @@ petCanvas.addEventListener("pointerup", (event) => {
   finishPointerGesture(event, false);
 });
 petCanvas.addEventListener("pointercancel", (event) => {
+  finishPointerGesture(event, true);
+});
+petCanvas.addEventListener("lostpointercapture", (event) => {
   finishPointerGesture(event, true);
 });
 
