@@ -1,86 +1,54 @@
-type SoundEffect = "quack" | "surprised" | "attacked";
+const honkUrl = new URL("./assets/sounds/honk.mp3", import.meta.url).href;
+const attackUrl = new URL("./assets/sounds/attack.mp3", import.meta.url).href;
+const runningUrl = new URL("./assets/sounds/running.mp3", import.meta.url).href;
 
-interface SoundProfile {
-  startFrequency: number;
-  middleFrequency: number;
-  endFrequency: number;
-  duration: number;
-  volume: number;
-  waveform: OscillatorType;
-  filterFrequency: number;
+const activeOneShots = new Set<HTMLAudioElement>();
+let runningAudio: HTMLAudioElement | null = null;
+
+export function playHonkSound(): Promise<void> {
+  return playOneShot(honkUrl);
 }
 
-const soundProfiles: Record<SoundEffect, SoundProfile> = {
-  quack: {
-    startFrequency: 460,
-    middleFrequency: 150,
-    endFrequency: 190,
-    duration: 0.32,
-    volume: 0.16,
-    waveform: "sawtooth",
-    filterFrequency: 1000,
-  },
-  surprised: {
-    startFrequency: 420,
-    middleFrequency: 760,
-    endFrequency: 620,
-    duration: 0.24,
-    volume: 0.12,
-    waveform: "triangle",
-    filterFrequency: 1400,
-  },
-  attacked: {
-    startFrequency: 210,
-    middleFrequency: 100,
-    endFrequency: 70,
-    duration: 0.22,
-    volume: 0.18,
-    waveform: "triangle",
-    filterFrequency: 650,
-  },
-};
+export function playAttackSound(): Promise<void> {
+  return playOneShot(attackUrl);
+}
 
-let audioContext: AudioContext | undefined;
-
-export async function playSoundEffect(effect: SoundEffect): Promise<void> {
-  const AudioContextConstructor = window.AudioContext;
-  if (!AudioContextConstructor) {
-    throw new Error("Web Audio is not available in this webview.");
+export function startRunningSound(): Promise<void> {
+  if (runningAudio) {
+    return Promise.resolve();
   }
 
-  audioContext ??= new AudioContextConstructor();
-  if (audioContext.state === "suspended") {
-    await audioContext.resume();
+  const audio = new Audio(runningUrl);
+  audio.loop = true;
+  runningAudio = audio;
+  return audio.play();
+}
+
+export function stopRunningSound(): void {
+  if (!runningAudio) {
+    return;
   }
 
-  const profile = soundProfiles[effect];
-  const now = audioContext.currentTime;
-  const oscillator = audioContext.createOscillator();
-  const filter = audioContext.createBiquadFilter();
-  const volume = audioContext.createGain();
+  runningAudio.pause();
+  runningAudio.currentTime = 0;
+  runningAudio = null;
+}
 
-  oscillator.type = profile.waveform;
-  oscillator.frequency.setValueAtTime(profile.startFrequency, now);
-  oscillator.frequency.exponentialRampToValueAtTime(
-    profile.middleFrequency,
-    now + profile.duration * 0.6,
-  );
-  oscillator.frequency.exponentialRampToValueAtTime(
-    profile.endFrequency,
-    now + profile.duration,
-  );
-  filter.type = "lowpass";
-  filter.frequency.setValueAtTime(profile.filterFrequency, now);
-  volume.gain.setValueAtTime(0.001, now);
-  volume.gain.exponentialRampToValueAtTime(profile.volume, now + 0.025);
-  volume.gain.exponentialRampToValueAtTime(
-    0.001,
-    now + profile.duration,
+async function playOneShot(url: string): Promise<void> {
+  const audio = new Audio(url);
+  activeOneShots.add(audio);
+  audio.addEventListener(
+    "ended",
+    () => {
+      activeOneShots.delete(audio);
+    },
+    { once: true },
   );
 
-  oscillator.connect(filter);
-  filter.connect(volume);
-  volume.connect(audioContext.destination);
-  oscillator.start(now);
-  oscillator.stop(now + profile.duration + 0.01);
+  try {
+    await audio.play();
+  } catch (error) {
+    activeOneShots.delete(audio);
+    throw error;
+  }
 }

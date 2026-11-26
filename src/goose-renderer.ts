@@ -1,14 +1,10 @@
-import {
-  ANIMATION_FPS,
-  GOOSE_SIZE,
-  SPRITE_OFFSET_Y,
-  type Goose,
-} from "./goose";
+import { GOOSE_SIZE, SPRITE_OFFSET_Y, type Goose } from "./goose";
+import { SPRITE_ANIMATION_FPS } from "./settings";
 
 type SpriteName =
   | "idle"
   | "walk"
-  | "run"
+  | "sprint"
   | "quack"
   | "peck"
   | "surprise";
@@ -21,11 +17,14 @@ interface SpriteSheet {
 }
 
 const FRAME_SIZE = 64;
+const HITBOX_EXPANSION = 30;
+const SOURCE_PIXEL_SIZE = GOOSE_SIZE / FRAME_SIZE;
+const SOURCE_HITBOX_EXPANSION = Math.ceil(HITBOX_EXPANSION / SOURCE_PIXEL_SIZE);
 
 const spriteUrls: Record<SpriteName, string> = {
   idle: new URL("./assets/sprites/idle.png", import.meta.url).href,
   walk: new URL("./assets/sprites/walk.png", import.meta.url).href,
-  run: new URL("./assets/sprites/run.png", import.meta.url).href,
+  sprint: new URL("./assets/sprites/sprint.png", import.meta.url).href,
   quack: new URL("./assets/quack.png", import.meta.url).href,
   peck: new URL("./assets/peck.png", import.meta.url).href,
   surprise: new URL("./assets/supprise.png", import.meta.url).href,
@@ -36,7 +35,7 @@ const spriteForState = (state: Goose["state"]): SpriteName => {
     return "walk";
   }
   if (state === "attack") {
-    return "run";
+    return "sprint";
   }
   if (state === "quack") {
     return "quack";
@@ -52,7 +51,6 @@ const spriteForState = (state: Goose["state"]): SpriteName => {
 
 export class GooseRenderer {
   private readonly sprites = new Map<SpriteName, SpriteSheet>();
-  private readonly nameTagText = new Map<string, HTMLCanvasElement>();
 
   constructor(private readonly context: CanvasRenderingContext2D) {}
 
@@ -148,10 +146,10 @@ export class GooseRenderer {
 
     if (
       !sprite ||
-      localX < 0 ||
-      localX >= GOOSE_SIZE ||
-      localY < 0 ||
-      localY >= GOOSE_SIZE
+      localX < -HITBOX_EXPANSION ||
+      localX >= GOOSE_SIZE + HITBOX_EXPANSION ||
+      localY < -HITBOX_EXPANSION ||
+      localY >= GOOSE_SIZE + HITBOX_EXPANSION
     ) {
       return false;
     }
@@ -162,14 +160,51 @@ export class GooseRenderer {
       frameX = FRAME_SIZE - 1 - frameX;
     }
 
-    for (let frame = 0; frame < sprite.frameCount; frame += 1) {
-      const offset = this.frameOffset(sprite, frame);
-      const sourceX = offset.x + frameX;
-      const sourceY = offset.y + frameY;
-      const alphaIndex =
-        (sourceY * sprite.image.naturalWidth + sourceX) * 4 + 3;
-      if (sprite.alphaMask.data[alphaIndex] > 0) {
-        return true;
+    for (let yOffset = -SOURCE_HITBOX_EXPANSION; yOffset <= SOURCE_HITBOX_EXPANSION; yOffset += 1) {
+      for (
+        let xOffset = -SOURCE_HITBOX_EXPANSION;
+        xOffset <= SOURCE_HITBOX_EXPANSION;
+        xOffset += 1
+      ) {
+        const nearbyX = frameX + xOffset;
+        const nearbyY = frameY + yOffset;
+        if (
+          nearbyX < 0 ||
+          nearbyX >= FRAME_SIZE ||
+          nearbyY < 0 ||
+          nearbyY >= FRAME_SIZE
+        ) {
+          continue;
+        }
+
+        const displayedX =
+          goose.direction === -1 ? FRAME_SIZE - 1 - nearbyX : nearbyX;
+        const pixelLeft = displayedX * SOURCE_PIXEL_SIZE;
+        const pixelTop = nearbyY * SOURCE_PIXEL_SIZE;
+        const distanceX = Math.max(
+          pixelLeft - localX,
+          0,
+          localX - pixelLeft - SOURCE_PIXEL_SIZE,
+        );
+        const distanceY = Math.max(
+          pixelTop - localY,
+          0,
+          localY - pixelTop - SOURCE_PIXEL_SIZE,
+        );
+        if (distanceX > HITBOX_EXPANSION || distanceY > HITBOX_EXPANSION) {
+          continue;
+        }
+
+        for (let frame = 0; frame < sprite.frameCount; frame += 1) {
+          const offset = this.frameOffset(sprite, frame);
+          const sourceX = offset.x + nearbyX;
+          const sourceY = offset.y + nearbyY;
+          const alphaIndex =
+            (sourceY * sprite.image.naturalWidth + sourceX) * 4 + 3;
+          if (sprite.alphaMask.data[alphaIndex] > 0) {
+            return true;
+          }
+        }
       }
     }
 
@@ -178,16 +213,21 @@ export class GooseRenderer {
 
   private frameIndex(goose: Goose, sprite: SpriteSheet): number {
     return (
-      Math.floor(goose.stateElapsed * ANIMATION_FPS) % sprite.frameCount
+      Math.floor(goose.stateElapsed * SPRITE_ANIMATION_FPS) %
+      sprite.frameCount
     );
   }
 
   private drawNameTag(goose: Goose, canvasWidth: number): void {
-    const textCanvas = this.getNameTagText(goose.name);
+    const font = 'bold 16px "Minecraft", "Minecraftia", "Courier New", monospace';
     const paddingX = 7;
-    const paddingY = 3;
-    const tagWidth = textCanvas.width + paddingX * 2;
-    const tagHeight = textCanvas.height + paddingY * 2;
+    const tagHeight = 24;
+    this.context.save();
+    this.context.font = font;
+    this.context.textAlign = "center";
+    this.context.textBaseline = "middle";
+    const tagWidth =
+      Math.ceil(this.context.measureText(goose.name).width) + paddingX * 2;
     const x = Math.min(
       Math.max(0, Math.round(goose.x + GOOSE_SIZE / 2 - tagWidth / 2)),
       Math.max(0, canvasWidth - tagWidth),
@@ -201,48 +241,13 @@ export class GooseRenderer {
     this.context.fillRect(x, y, tagWidth, tagHeight);
     this.context.strokeStyle = "rgba(0, 0, 0, 0.55)";
     this.context.strokeRect(x + 0.5, y + 0.5, tagWidth - 1, tagHeight - 1);
-    this.context.save();
-    this.context.imageSmoothingEnabled = false;
-    this.context.drawImage(
-      textCanvas,
-      x + paddingX,
-      y + paddingY,
-      textCanvas.width,
-      textCanvas.height,
+    this.context.fillStyle = "#ffffff";
+    this.context.fillText(
+      goose.name,
+      goose.x + GOOSE_SIZE / 2,
+      y + tagHeight / 2,
     );
     this.context.restore();
-  }
-
-  private getNameTagText(name: string): HTMLCanvasElement {
-    const cached = this.nameTagText.get(name);
-    if (cached) {
-      return cached;
-    }
-
-    const canvas = document.createElement("canvas");
-    const measureContext = canvas.getContext("2d");
-    if (!measureContext) {
-      throw new Error("Could not create the goose name tag canvas.");
-    }
-
-    const font = 'bold 14px "Minecraft", "Minecraftia", "Courier New", monospace';
-    measureContext.font = font;
-    canvas.width = Math.ceil(measureContext.measureText(name).width) + 4;
-    canvas.height = 18;
-
-    const textContext = canvas.getContext("2d");
-    if (!textContext) {
-      throw new Error("Could not draw the goose name tag.");
-    }
-
-    textContext.font = font;
-    textContext.textAlign = "center";
-    textContext.textBaseline = "middle";
-    textContext.fillStyle = "#ffffff";
-    textContext.fillText(name, canvas.width / 2, canvas.height / 2);
-
-    this.nameTagText.set(name, canvas);
-    return canvas;
   }
 
   private frameOffset(

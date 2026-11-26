@@ -1,7 +1,12 @@
 import { cursorPosition, getCurrentWindow } from "@tauri-apps/api/window";
 import { Goose, GOOSE_SIZE, SPRITE_OFFSET_Y } from "./goose";
 import { GooseRenderer } from "./goose-renderer";
-import { playSoundEffect } from "./quack-audio";
+import {
+  playAttackSound,
+  playHonkSound,
+  startRunningSound,
+  stopRunningSound,
+} from "./quack-audio";
 
 const POINTER_POLL_INTERVAL_MS = 30;
 const DRAG_THRESHOLD = 5;
@@ -43,6 +48,7 @@ let cursorEventsIgnored = false;
 let windowPosition = { x: 0, y: 0 };
 let windowScaleFactor = 1;
 let pointerGesture: PointerGesture | null = null;
+let runningSoundActive = false;
 
 function resizeCanvas(): void {
   const bounds = petCanvas.getBoundingClientRect();
@@ -131,25 +137,44 @@ async function setCursorEventsIgnored(ignore: boolean): Promise<void> {
   }
 }
 
-function playEffect(effect: "quack" | "surprised" | "attacked"): void {
-  void playSoundEffect(effect).catch((error: unknown) => {
-    console.error(`Could not play the ${effect} sound effect.`, error);
+function playOneShot(sound: "honk" | "attack"): void {
+  const playback =
+    sound === "honk" ? playHonkSound() : playAttackSound();
+  void playback.catch((error: unknown) => {
+    console.error(`Could not play the ${sound} sound.`, error);
   });
+}
+
+function syncRunningSound(): void {
+  const shouldRun = playerGoose.state === "attack";
+  if (shouldRun === runningSoundActive) {
+    return;
+  }
+
+  runningSoundActive = shouldRun;
+  if (shouldRun) {
+    void startRunningSound().catch((error: unknown) => {
+      console.error("Could not play the running sound.", error);
+    });
+  } else {
+    stopRunningSound();
+  }
 }
 
 function handleGooseClick(goose: Goose): void {
   if (goose === playerGoose) {
     playerGoose.quack();
-    playEffect("quack");
+    playOneShot("honk");
+    syncRunningSound();
     return;
   }
 
   const attackLanded = playerGoose.attack(otherGoose);
   otherGoose.prepareForAttack(playerGoose);
-  playEffect("surprised");
   if (attackLanded) {
-    playEffect("attacked");
+    playOneShot("attack");
   }
+  syncRunningSound();
 }
 
 function animate(now: number): void {
@@ -168,11 +193,12 @@ function animate(now: number): void {
         counterpart,
       );
       if (attackLanded && goose === playerGoose) {
-        playEffect("attacked");
+        playOneShot("attack");
       }
     }
   }
 
+  syncRunningSound();
   context.clearRect(0, 0, canvasWidth, canvasHeight);
   renderer.draw(geese, canvasWidth);
   requestAnimationFrame(animate);

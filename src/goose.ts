@@ -1,16 +1,21 @@
+import {
+  GOOSE_RUN_SPEED,
+  GOOSE_WALK_SPEED,
+  SPRITE_ANIMATION_FPS,
+} from "./settings";
+
 export const GOOSE_SIZE = 128;
 export const SPRITE_OFFSET_Y = 15;
 const PREFERRED_GOOSE_DISTANCE = GOOSE_SIZE + 18;
 const ATTACK_CONTACT_DISTANCE = GOOSE_SIZE - 48;
 
-export const ANIMATION_FPS = 8;
 const IDLE_FRAME_COUNT = 6;
 const WALK_FRAME_COUNT = 7;
 const RUN_FRAME_COUNT = 8;
-const IDLE_CYCLE_SECONDS = IDLE_FRAME_COUNT / ANIMATION_FPS;
-const WALK_CYCLE_SECONDS = WALK_FRAME_COUNT / ANIMATION_FPS;
-const RUN_CYCLE_SECONDS = RUN_FRAME_COUNT / ANIMATION_FPS;
-const WALK_SPEED = 80;
+const IDLE_CYCLE_SECONDS = IDLE_FRAME_COUNT / SPRITE_ANIMATION_FPS;
+const WALK_CYCLE_SECONDS = WALK_FRAME_COUNT / SPRITE_ANIMATION_FPS;
+const RUN_CYCLE_SECONDS = RUN_FRAME_COUNT / SPRITE_ANIMATION_FPS;
+const WALK_SPEED = GOOSE_WALK_SPEED;
 const WALK_CYCLE_DISTANCE = WALK_SPEED * WALK_CYCLE_SECONDS;
 
 export type GooseState =
@@ -27,9 +32,6 @@ const AIR_DRAG = 0.55;
 const GROUND_DRAG = 5;
 const BOUNDARY_BOUNCE = 0.35;
 const MAX_THROW_SPEED = 1500;
-const randomBetween = (min: number, max: number): number =>
-  min + Math.random() * (max - min);
-
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
 
@@ -77,7 +79,7 @@ export class Goose {
       return true;
     }
 
-    this.speed = randomBetween(300, 380);
+    this.speed = GOOSE_RUN_SPEED;
     this.state = "attack";
     this.stateElapsed = 0;
     this.stateDuration = Number.POSITIVE_INFINITY;
