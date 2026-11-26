@@ -1,6 +1,7 @@
 # Waddle
 
-Waddle is a transparent, full-screen desktop overlay with two goose sprites. They wander along the bottom, can be dragged around the screen, and fall under gravity when released. The window stays above other windows and passes pointer input through empty areas.
+A tiny, unhinged a flock of geese that lives on your screen while you pretend to study.
+Attack your friends in real time while they try to focus.
 
 ## How it works
 
