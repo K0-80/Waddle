@@ -1,9 +1,5 @@
 import { cursorPosition, getCurrentWindow } from "@tauri-apps/api/window";
-import {
-  Goose,
-  GOOSE_SIZE,
-  MIN_GOOSE_DISTANCE,
-} from "./goose";
+import { Goose, GOOSE_SIZE } from "./goose";
 import { GooseRenderer } from "./goose-renderer";
 import { playSoundEffect } from "./quack-audio";
 
@@ -121,18 +117,17 @@ function animate(now: number): void {
 
   for (const goose of geese) {
     if (pointerGesture?.goose !== goose) {
-      const attackLanded = goose.update(deltaSeconds, maxX, floorY);
+      const counterpart = goose === playerGoose ? otherGoose : playerGoose;
+      const attackLanded = goose.update(
+        deltaSeconds,
+        maxX,
+        floorY,
+        counterpart,
+      );
       if (attackLanded && goose === playerGoose) {
         playEffect("attacked");
       }
     }
-  }
-
-  const statesAllowSpacing = geese.every(
-    (goose) => goose.state === "idle" || goose.state === "wandering",
-  );
-  if (!pointerGesture && statesAllowSpacing && maxX >= MIN_GOOSE_DISTANCE) {
-    playerGoose.constrainDistanceFrom(otherGoose, maxX);
   }
 
   context.clearRect(0, 0, canvasWidth, canvasHeight);

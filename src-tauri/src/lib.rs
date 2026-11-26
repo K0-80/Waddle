@@ -25,8 +25,8 @@ pub fn run() {
                 )
             })?;
 
-            window.set_size(monitor.size())?;
-            window.set_position(monitor.position())?;
+            window.set_size(*monitor.size())?;
+            window.set_position(*monitor.position())?;
 
             Ok(())
         })

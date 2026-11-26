@@ -1,5 +1,6 @@
 export const GOOSE_SIZE = 128;
-export const MIN_GOOSE_DISTANCE = GOOSE_SIZE + 18;
+const PREFERRED_GOOSE_DISTANCE = GOOSE_SIZE + 18;
+const ATTACK_CONTACT_DISTANCE = GOOSE_SIZE - 48;
 
 export type GooseState =
   | "idle"
@@ -28,6 +29,7 @@ export class Goose {
   private wanderTarget: number | null = null;
   private attackTarget: Goose | null = null;
   private surpriseAttacker: Goose | null = null;
+  private avoidanceCooldown = 0;
 
   constructor(x: number, y: number) {
     this.x = x;
@@ -85,8 +87,17 @@ export class Goose {
     }
   }
 
-  update(deltaSeconds: number, maxX: number, floorY: number): boolean {
+  update(
+    deltaSeconds: number,
+    maxX: number,
+    floorY: number,
+    other: Goose,
+  ): boolean {
     this.stateElapsed += deltaSeconds;
+    this.avoidanceCooldown = Math.max(
+      0,
+      this.avoidanceCooldown - deltaSeconds,
+    );
     let attackLanded = false;
 
     switch (this.state) {
@@ -96,6 +107,7 @@ export class Goose {
         }
         break;
       case "wandering":
+        this.considerAvoidance(other, maxX);
         this.moveToward(this.wanderTarget ?? this.x, deltaSeconds, maxX);
         if (
           this.stateElapsed >= this.stateDuration ||
@@ -133,16 +145,22 @@ export class Goose {
     return attackLanded;
   }
 
-  constrainDistanceFrom(other: Goose, maxX: number): void {
-    const distance = other.x - this.x;
-    if (Math.abs(distance) >= MIN_GOOSE_DISTANCE) {
+  private considerAvoidance(other: Goose, maxX: number): void {
+    const distance = Math.abs(other.x - this.x);
+    if (
+      this.avoidanceCooldown > 0 ||
+      distance >= PREFERRED_GOOSE_DISTANCE
+    ) {
       return;
     }
 
-    const direction = distance >= 0 ? 1 : -1;
-    const correction = (MIN_GOOSE_DISTANCE - Math.abs(distance)) / 2;
-    this.x = clamp(this.x - direction * correction, 0, maxX);
-    other.x = clamp(other.x + direction * correction, 0, maxX);
+    const closeness = 1 - distance / PREFERRED_GOOSE_DISTANCE;
+    const avoidanceProbability = 0.2 + closeness * 0.7;
+    this.avoidanceCooldown = 0.45;
+
+    if (Math.random() < avoidanceProbability) {
+      this.wanderAwayFrom(other.x, maxX);
+    }
   }
 
   private updateAttack(deltaSeconds: number, maxX: number): boolean {
@@ -153,14 +171,14 @@ export class Goose {
 
     const distance = this.attackTarget.x - this.x;
     this.direction = distance >= 0 ? 1 : -1;
-    if (Math.abs(distance) <= MIN_GOOSE_DISTANCE) {
+    if (Math.abs(distance) <= ATTACK_CONTACT_DISTANCE) {
       this.wanderTarget = null;
       this.transition("peck", 0.55);
       return true;
     }
 
     this.moveToward(
-      this.attackTarget.x - this.direction * MIN_GOOSE_DISTANCE,
+      this.attackTarget.x - this.direction * ATTACK_CONTACT_DISTANCE,
       deltaSeconds,
       maxX,
     );
@@ -180,6 +198,31 @@ export class Goose {
     this.state = "wandering";
     this.stateElapsed = 0;
     this.stateDuration = randomBetween(1.2, 3.4);
+  }
+
+  private wanderAwayFrom(otherX: number, maxX: number): void {
+    const awayDirection: -1 | 1 =
+      this.x < otherX
+        ? -1
+        : this.x > otherX
+          ? 1
+          : Math.random() < 0.5
+            ? -1
+            : 1;
+    const target = awayDirection < 0
+      ? randomBetween(0, Math.max(0, this.x - 12))
+      : randomBetween(Math.min(maxX, this.x + 12), maxX);
+
+    if (Math.abs(target - this.x) < 12) {
+      this.returnToIdle();
+      return;
+    }
+
+    this.wanderTarget = target;
+    this.direction = awayDirection;
+    this.speed = randomBetween(36, 84);
+    this.stateElapsed = 0;
+    this.stateDuration = randomBetween(0.8, 2);
   }
 
   private moveToward(target: number, deltaSeconds: number, maxX: number): void {
