@@ -7,9 +7,9 @@ Attack your friends in real time while they try to focus.
 
 - `src-tauri/tauri.conf.json` configures the transparent, always-on-top window.
 - `src-tauri/src/lib.rs` sizes and positions it to cover the primary monitor.
-- `src/main.ts` runs the canvas loop and uses Tauri's cursor-position API to turn click-through off only while the pointer is over a goose.
+- `src/main.ts` runs the canvas loop, assigns the `Triple T` and `test subject` name tags, and uses Tauri's cursor-position API to turn click-through off only while the pointer is over a goose.
 - `src/goose.ts` manages idle, wandering, quack, surprise, attack, peck, and gravity.
-- `src/goose-renderer.ts` animates 64x64-frame sprite sheets at 128x128 with crisp pixel-art scaling and alpha-aware hit testing. It accepts both horizontal and vertical sheets.
+- `src/goose-renderer.ts` animates 64x64-frame sprite sheets at 128x128 with crisp pixel-art scaling, Minecraft-style name tags, and alpha-aware hit testing. It accepts both horizontal and vertical sheets.
 - `src/quack-audio.ts` synthesizes quack, surprised, and attacked effects with the Web Audio API; no audio files are required.
 - `src-tauri/capabilities/default.json` grants the window permission to switch pointer handling.
 

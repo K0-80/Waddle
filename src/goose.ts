@@ -53,7 +53,11 @@ export class Goose {
   private attackContactAt: number | null = null;
   private nextAvoidanceAt = WALK_CYCLE_SECONDS;
 
-  constructor(x: number, y: number) {
+  constructor(
+    x: number,
+    y: number,
+    readonly name: string,
+  ) {
     this.x = x;
     this.y = y;
   }

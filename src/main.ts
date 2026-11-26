@@ -20,8 +20,8 @@ if (!canvasContext) {
 
 const context: CanvasRenderingContext2D = canvasContext;
 const overlayWindow = getCurrentWindow();
-const playerGoose = new Goose(0, 0);
-const otherGoose = new Goose(0, 0);
+const playerGoose = new Goose(0, 0, "The Big G");
+const otherGoose = new Goose(0, 0, "test_subject");
 const geese = [playerGoose, otherGoose];
 const renderer = new GooseRenderer(context);
 
@@ -174,7 +174,7 @@ function animate(now: number): void {
   }
 
   context.clearRect(0, 0, canvasWidth, canvasHeight);
-  renderer.draw(geese);
+  renderer.draw(geese, canvasWidth);
   requestAnimationFrame(animate);
 }
 
