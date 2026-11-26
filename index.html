@@ -11,7 +11,132 @@
   <body>
     <canvas
       id="pet-canvas"
-      aria-label="Two little pets walking along the desktop"
+      aria-label="Your goose and other online geese"
     ></canvas>
+    <section id="auth-panel" class="auth-panel" aria-labelledby="auth-title">
+      <div class="auth-card interactive">
+        <header class="auth-header">
+          <div class="auth-mark" aria-hidden="true">
+            <img src="/src/assets/icon.png" alt="" width="64" height="64" />
+          </div>
+          <div>
+            <h1 id="auth-title">Waddle</h1>
+            <p>A tiny, unhinged goose that lives on your friend's desktop in real time! </p>
+          </div>
+        </header>
+        <form id="auth-form" class="auth-form">
+          <label id="username-field" class="auth-field" hidden>
+            <span>Username</span>
+            <input
+              id="auth-username"
+              name="username"
+              type="text"
+              minlength="3"
+              maxlength="20"
+              autocomplete="username"
+              pattern="[A-Za-z0-9_]{3,20}"
+              placeholder="Big G"
+            />
+          </label>
+          <label class="auth-field">
+            <span>Email</span>
+            <input
+              id="auth-email"
+              name="email"
+              type="email"
+              autocomplete="email"
+              placeholder="gooseboi@goosemail.com"
+              required
+            />
+          </label>
+          <label class="auth-field">
+            <span>Password</span>
+            <input
+              id="auth-password"
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              minlength="6"
+              placeholder="boigoose123"
+              required
+            />
+          </label>
+          <p id="auth-status" class="auth-status" role="status" aria-live="polite"></p>
+          <div class="auth-actions">
+            <button id="auth-submit" class="primary-button" type="submit">Sign in</button>
+            <button id="auth-mode-toggle" class="text-button" type="button">
+              New Here? Create an account
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+    <section
+      id="room-panel"
+      class="room-panel interactive"
+      aria-label="Multiplayer room"
+      hidden
+    >
+      <div id="room-setup">
+        <h2>Find your flock</h2>
+        <form id="room-form">
+          <label class="room-field" for="room-name">
+            <span>Room name / code</span>
+            <input
+              id="room-name"
+              name="room-name"
+              type="text"
+              minlength="3"
+              maxlength="32"
+              autocomplete="off"
+              pattern="[A-Za-z0-9][A-Za-z0-9 _-]{1,31}"
+              placeholder="Friday-flock"
+              required
+            />
+          </label>
+          <div class="room-actions">
+            <button id="create-room" class="primary-button" type="button">
+              Create room
+            </button>
+            <button id="join-room" class="secondary-button" type="submit">
+              Join room
+            </button>
+          </div>
+        </form>
+      </div>
+      <div id="room-details" hidden>
+        <h2>In the flock</h2>
+        <div class="room-detail">
+          <span>Players</span>
+          <strong id="room-player-count">1 / 6</strong>
+        </div>
+        <div class="room-detail">
+          <span>Room code</span>
+          <code id="room-code"></code>
+        </div>
+        <div class="room-detail">
+          <span>Online for</span>
+          <time id="room-online-time">00:00</time>
+        </div>
+        <button id="leave-room" class="secondary-button" type="button">
+          Leave room
+        </button>
+      </div>
+      <p id="room-feedback" class="room-feedback" role="status" aria-live="polite"></p>
+    </section>
+    <aside id="session-bar" class="session-bar interactive" hidden>
+      <span id="session-name"></span>
+      <span id="connection-status" class="connection-status">Offline</span>
+      <button
+        id="toggle-room-panel"
+        class="text-button"
+        type="button"
+        aria-controls="room-panel"
+        aria-expanded="true"
+      >
+        Hide flock
+      </button>
+      <button id="sign-out" class="text-button" type="button">Sign out</button>
+    </aside>
   </body>
 </html>

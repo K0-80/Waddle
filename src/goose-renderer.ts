@@ -219,7 +219,7 @@ export class GooseRenderer {
   }
 
   private drawNameTag(goose: Goose, canvasWidth: number): void {
-    const font = 'bold 16px "Minecraft", "Minecraftia", "Courier New", monospace';
+    const font = 'bold 16px "Monocraft", monospace';
     const paddingX = 7;
     const tagHeight = 24;
     this.context.save();
@@ -237,11 +237,11 @@ export class GooseRenderer {
       Math.round(goose.y + SPRITE_OFFSET_Y - tagHeight - 4),
     );
 
-    this.context.fillStyle = "rgba(54, 54, 54, 0.78)";
+    this.context.fillStyle = "rgba(64, 51, 46, 0.9)";
     this.context.fillRect(x, y, tagWidth, tagHeight);
-    this.context.strokeStyle = "rgba(0, 0, 0, 0.55)";
+    this.context.strokeStyle = "#fffaf0";
     this.context.strokeRect(x + 0.5, y + 0.5, tagWidth - 1, tagHeight - 1);
-    this.context.fillStyle = "#ffffff";
+    this.context.fillStyle = "#fffaf0";
     this.context.fillText(
       goose.name,
       goose.x + GOOSE_SIZE / 2,

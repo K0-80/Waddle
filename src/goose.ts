@@ -8,13 +8,13 @@ export const GOOSE_SIZE = 128;
 export const SPRITE_OFFSET_Y = 15;
 const PREFERRED_GOOSE_DISTANCE = GOOSE_SIZE + 18;
 const ATTACK_CONTACT_DISTANCE = GOOSE_SIZE - 48;
+const ATTACK_TIMEOUT_SECONDS = 7;
+const SURPRISE_DURATION_SECONDS = ATTACK_TIMEOUT_SECONDS + 0.55;
 
 const IDLE_FRAME_COUNT = 6;
 const WALK_FRAME_COUNT = 7;
-const RUN_FRAME_COUNT = 8;
 const IDLE_CYCLE_SECONDS = IDLE_FRAME_COUNT / SPRITE_ANIMATION_FPS;
 const WALK_CYCLE_SECONDS = WALK_FRAME_COUNT / SPRITE_ANIMATION_FPS;
-const RUN_CYCLE_SECONDS = RUN_FRAME_COUNT / SPRITE_ANIMATION_FPS;
 const WALK_SPEED = GOOSE_WALK_SPEED;
 const WALK_CYCLE_DISTANCE = WALK_SPEED * WALK_CYCLE_SECONDS;
 
@@ -35,6 +35,14 @@ const MAX_THROW_SPEED = 1500;
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
 
+export function getDeterministicSpawnX(userId: string, maxX: number): number {
+  const spawnHash = Array.from(userId).reduce(
+    (hash, character) => Math.imul(hash, 31) + character.charCodeAt(0),
+    0,
+  );
+  return ((spawnHash >>> 0) / 0xffffffff) * Math.max(0, maxX);
+}
+
 const randomIdleDuration = (): number =>
   (7 + Math.floor(Math.random() * 7)) * IDLE_CYCLE_SECONDS;
 
@@ -46,14 +54,18 @@ export class Goose {
   stateElapsed = 0;
   velocityX = 0;
   velocityY = 0;
+  isDragging = false;
   private stateDuration = randomIdleDuration();
   private speed = 0;
   private wanderTarget: number | null = null;
   private attackTarget: Goose | null = null;
   private surpriseAttacker: Goose | null = null;
   private avoidanceCooldown = 0;
-  private attackContactAt: number | null = null;
   private nextAvoidanceAt = WALK_CYCLE_SECONDS;
+  private remoteControlled = false;
+  private remoteDragging = false;
+  private remoteTargetX: number | null = null;
+  private remoteTargetY: number | null = null;
 
   constructor(
     x: number,
@@ -71,9 +83,10 @@ export class Goose {
   }
 
   attack(target: Goose): boolean {
+    this.cancelAttack();
     this.attackTarget = target;
-    this.attackContactAt = null;
     this.wanderTarget = null;
+    this.direction = target.x >= this.x ? 1 : -1;
     if (Math.abs(target.x - this.x) <= ATTACK_CONTACT_DISTANCE) {
       this.transition("peck", 0.55);
       return true;
@@ -87,20 +100,64 @@ export class Goose {
   }
 
   prepareForAttack(attacker: Goose): void {
+    this.cancelAttack();
     this.wanderTarget = null;
     this.surpriseAttacker = attacker;
     this.direction = attacker.x < this.x ? -1 : 1;
-    this.transition("surprise", Number.POSITIVE_INFINITY);
+    this.transition("surprise", SURPRISE_DURATION_SECONDS);
   }
 
-  finishSurprise(): void {
-    if (this.state === "surprise") {
+  finishSurprise(attacker?: Goose): void {
+    if (
+      this.state === "surprise" &&
+      (attacker === undefined || this.surpriseAttacker === attacker)
+    ) {
       this.surpriseAttacker = null;
       this.returnToIdle();
     }
   }
 
+  getActionDuration(): number {
+    return Number.isFinite(this.stateDuration)
+      ? this.stateDuration
+      : ATTACK_TIMEOUT_SECONDS;
+  }
+
+  applyRemoteAction(
+    state: GooseState,
+    direction: -1 | 1,
+    stateElapsed: number,
+    duration: number,
+    actionRestarted: boolean,
+    x: number,
+    y: number,
+    dragging: boolean,
+    maxX: number,
+    maxY: number,
+  ): void {
+    this.remoteControlled = true;
+    this.remoteDragging = dragging;
+    this.remoteTargetX = clamp(x, 0, maxX);
+    this.remoteTargetY = clamp(y, 0, maxY);
+    this.direction = direction;
+    this.stateDuration = Math.max(0, duration);
+    const nextElapsed = Math.min(
+      Math.max(0, stateElapsed),
+      this.stateDuration,
+    );
+
+    if (actionRestarted) {
+      this.state = state;
+      this.stateElapsed = nextElapsed;
+      this.speed = 0;
+      this.wanderTarget = null;
+    } else {
+      this.stateElapsed = Math.max(this.stateElapsed, nextElapsed);
+    }
+  }
+
   beginDrag(): void {
+    this.isDragging = true;
     if (this.state === "surprise") {
       const attacker = this.surpriseAttacker;
       this.surpriseAttacker = null;
@@ -116,6 +173,7 @@ export class Goose {
   }
 
   releaseFromDrag(velocityX: number, velocityY: number): void {
+    this.isDragging = false;
     this.velocityX = clamp(velocityX, -MAX_THROW_SPEED, MAX_THROW_SPEED);
     this.velocityY = clamp(velocityY, -MAX_THROW_SPEED, MAX_THROW_SPEED);
   }
@@ -123,6 +181,12 @@ export class Goose {
   resize(maxX: number, maxY: number): void {
     this.x = clamp(this.x, 0, maxX);
     this.y = clamp(this.y, 0, maxY);
+    if (this.remoteTargetX !== null) {
+      this.remoteTargetX = clamp(this.remoteTargetX, 0, maxX);
+    }
+    if (this.remoteTargetY !== null) {
+      this.remoteTargetY = clamp(this.remoteTargetY, 0, maxY);
+    }
     if (this.wanderTarget !== null) {
       this.wanderTarget = clamp(this.wanderTarget, 0, maxX);
     }
@@ -132,8 +196,33 @@ export class Goose {
     deltaSeconds: number,
     maxX: number,
     floorY: number,
-    other: Goose,
+    other?: Goose,
   ): boolean {
+    if (this.remoteControlled) {
+      if (!this.remoteDragging) {
+        this.stateElapsed += deltaSeconds;
+      }
+      const followRate = this.remoteDragging ? 24 : 18;
+      const follow = 1 - Math.exp(-deltaSeconds * followRate);
+      if (this.remoteTargetX !== null) {
+        const distanceX = this.remoteTargetX - this.x;
+        this.x =
+          Math.abs(distanceX) < 1
+            ? this.remoteTargetX
+            : this.x + distanceX * follow;
+      }
+      if (this.remoteTargetY !== null) {
+        const distanceY = this.remoteTargetY - this.y;
+        this.y =
+          Math.abs(distanceY) < 1
+            ? this.remoteTargetY
+            : this.y + distanceY * follow;
+      }
+      this.x = clamp(this.x, 0, maxX);
+      this.y = clamp(this.y, 0, floorY);
+      return false;
+    }
+
     this.stateElapsed += deltaSeconds;
     this.avoidanceCooldown = Math.max(
       0,
@@ -153,7 +242,9 @@ export class Goose {
           this.stateElapsed + 0.02 >= this.nextAvoidanceAt
         ) {
           this.nextAvoidanceAt += WALK_CYCLE_SECONDS;
-          this.considerAvoidance(other, maxX);
+          if (other) {
+            this.considerAvoidance(other, maxX);
+          }
         }
         this.moveToward(this.wanderTarget ?? this.x, deltaSeconds, maxX);
         if (
@@ -179,6 +270,9 @@ export class Goose {
         }
         break;
       case "surprise":
+        if (this.stateElapsed >= this.stateDuration) {
+          this.finishSurprise();
+        }
         break;
     }
 
@@ -235,28 +329,20 @@ export class Goose {
       this.returnToIdle();
       return false;
     }
+    if (this.stateElapsed >= ATTACK_TIMEOUT_SECONDS) {
+      this.cancelAttack();
+      this.returnToIdle();
+      return false;
+    }
 
     const distance = this.attackTarget.x - this.x;
     this.direction = distance >= 0 ? 1 : -1;
     if (Math.abs(distance) <= ATTACK_CONTACT_DISTANCE) {
       this.wanderTarget = null;
-      if (this.attackContactAt === null) {
-        const completedCycles = Math.floor(
-          (this.stateElapsed + 0.02) / RUN_CYCLE_SECONDS,
-        );
-        this.attackContactAt =
-          Math.max(1, completedCycles) * RUN_CYCLE_SECONDS;
-      }
-
-      if (this.stateElapsed >= this.attackContactAt - 0.02) {
-        this.attackContactAt = null;
-        this.transition("peck", 0.55);
-        return true;
-      }
-      return false;
+      this.transition("peck", 0.55);
+      return true;
     }
 
-    this.attackContactAt = null;
     this.moveToward(
       this.attackTarget.x - this.direction * ATTACK_CONTACT_DISTANCE,
       deltaSeconds,
@@ -336,10 +422,11 @@ export class Goose {
     this.x = clamp(this.x, 0, maxX);
   }
 
-  private cancelAttack(): void {
-    this.attackTarget?.finishSurprise();
+  private cancelAttack(notifyTarget = true): void {
+    if (notifyTarget) {
+      this.attackTarget?.finishSurprise();
+    }
     this.attackTarget = null;
-    this.attackContactAt = null;
   }
 
   private returnToIdle(): void {

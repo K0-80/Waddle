@@ -3,7 +3,32 @@ const attackUrl = new URL("./assets/sounds/attack.mp3", import.meta.url).href;
 const runningUrl = new URL("./assets/sounds/running.mp3", import.meta.url).href;
 
 const activeOneShots = new Set<HTMLAudioElement>();
+const silentHonk = new Audio(honkUrl);
+silentHonk.preload = "auto";
+silentHonk.load();
+let audioUnlocked = false;
+let unlockingAudio: Promise<void> | null = null;
 let runningAudio: HTMLAudioElement | null = null;
+
+export function unlockAudio(): void {
+  if (audioUnlocked || unlockingAudio) {
+    return;
+  }
+
+  silentHonk.muted = true;
+  unlockingAudio = silentHonk
+    .play()
+    .then(() => {
+      silentHonk.pause();
+      silentHonk.currentTime = 0;
+      silentHonk.muted = false;
+      audioUnlocked = true;
+    })
+    .catch((error: unknown) => {
+      unlockingAudio = null;
+      console.error("Could not prepare goose sounds for playback.", error);
+    });
+}
 
 export function playHonkSound(): Promise<void> {
   return playOneShot(honkUrl);
