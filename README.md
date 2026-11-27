@@ -3,7 +3,7 @@
    &nbsp;Waddle
 </h1>
 
-Waddle is a tiny goose that lives on your desktop while you study. Enter a room code to have your goose  interact with other *friendly* Waddlers in real time.
+Waddle is a tiny goose that lives on your desktop while you study. Enter a room code to have your goose  interact with other *friendly* Waddlers in real time. Works on Windows, Mac AND linux.
 
 <table>
   <tr>
