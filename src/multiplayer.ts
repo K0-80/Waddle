@@ -3,16 +3,56 @@ import {
   type MessageAction,
   type Room,
   type RoomError,
+  type TurnServerConfig,
   type UserState,
 } from "trystero";
 import { Goose, type GooseState } from "./goose";
 
 const APP_ID = "k0-80/waddle";
-export const MAX_ROOM_PLAYERS = 6;
+export const MAX_ROOM_PLAYERS = 10;
 const ATTACK_COOLDOWN_MS = 650;
 const SYNC_INTERVAL_MS = 50;
 const USERNAME_PATTERN = /^[A-Za-z0-9_]{3,20}$/;
 const ROOM_CODE_PATTERN = /^[a-z0-9][a-z0-9_-]{2,31}$/;
+
+function getTurnConfig(): TurnServerConfig[] {
+  const rawUrls: unknown = import.meta.env.VITE_TURN_URLS;
+  const rawUsername: unknown = import.meta.env.VITE_TURN_USERNAME;
+  const rawCredential: unknown = import.meta.env.VITE_TURN_CREDENTIAL;
+  const urls =
+    typeof rawUrls === "string"
+      ? rawUrls
+          .split(",")
+          .map((url) => url.trim())
+          .filter((url) => url.length > 0)
+      : [];
+  const username = typeof rawUsername === "string" ? rawUsername.trim() : "";
+  const credential =
+    typeof rawCredential === "string" ? rawCredential.trim() : "";
+
+  if (urls.length === 0) {
+    if (username || credential) {
+      throw new Error("Set VITE_TURN_URLS to use TURN credentials.");
+    }
+    return [];
+  }
+
+  if (urls.some((url) => !/^turns?:/i.test(url))) {
+    throw new Error("VITE_TURN_URLS must contain TURN or TURNS URLs.");
+  }
+  if (Boolean(username) !== Boolean(credential)) {
+    throw new Error(
+      "Set both VITE_TURN_USERNAME and VITE_TURN_CREDENTIAL, or neither.",
+    );
+  }
+
+  return [
+    {
+      urls,
+      ...(username && credential ? { username, credential } : {}),
+    },
+  ];
+}
 
 export type ConnectionState = "offline" | "connecting" | "online";
 
@@ -384,10 +424,12 @@ export class Multiplayer {
 
     let room: Room | null = null;
     try {
+      const turnConfig = getTurnConfig();
       const activeRoom = joinTrysteroRoom(
         {
           appId: APP_ID,
           maxUsers: MAX_ROOM_PLAYERS,
+          ...(turnConfig.length > 0 ? { turnConfig } : {}),
         },
         roomCode,
       );
@@ -524,6 +566,15 @@ export class Multiplayer {
       void this.leaveRoom().catch((leaveError: unknown) => {
         console.error("Could not leave the full Trystero room.", leaveError);
       });
+      return;
+    }
+
+    if (error.code === "peer-connect-failed") {
+      this.callbacks.onError(
+        error.turnConfigured
+          ? `${error.message} Check the TURN server URLs and credentials.`
+          : `${error.message} This network may require a TURN relay. Configure VITE_TURN_URLS in .env.local and restart the app.`,
+      );
       return;
     }
 
