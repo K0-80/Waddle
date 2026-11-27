@@ -11,15 +11,24 @@ import {
   Multiplayer,
   normalizeRoomCode,
   type ConnectionState,
+  type RemoteProfile,
+  type RoomSound,
   type RoomInfo,
 } from "./multiplayer";
 import {
   playAttackSound,
   playHonkSound,
+  playSplatSound,
   startRunningSound,
   stopRunningSound,
+  setMasterVolume,
+  setMuteWhenUnfocused,
   unlockAudio,
 } from "./quack-audio";
+import {
+  DEFAULT_USER_PREFERENCES,
+  type UserPreferences,
+} from "./settings";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const POINTER_POLL_INTERVAL_MS = 30;
@@ -56,17 +65,36 @@ if (!connectionStatusElement) {
   throw new Error("The multiplayer connection status could not be found.");
 }
 const connectionStatus: HTMLElement = connectionStatusElement;
-const roomPanel = requiredElement<HTMLElement>("#room-panel");
-const toggleRoomPanelButton =
-  requiredElement<HTMLButtonElement>("#toggle-room-panel");
+const connectionIndicator =
+  requiredElement<HTMLElement>("#connection-indicator");
+const sessionBar = requiredElement<HTMLElement>("#session-bar");
+const sessionMenu = requiredElement<HTMLElement>("#session-menu");
+const sessionName = requiredElement<HTMLElement>("#session-name");
+const localConnectionStatus =
+  requiredElement<HTMLElement>("#local-connection-status");
+const localProfile = requiredElement<HTMLElement>("#local-profile");
+const remoteProfileSection =
+  requiredElement<HTMLElement>("#remote-profile");
+const remoteAboutMe =
+  requiredElement<HTMLElement>("#remote-about-me");
+const localMenuContent =
+  requiredElement<HTMLElement>("#local-menu-content");
+const settingsContent =
+  requiredElement<HTMLElement>("#settings-content");
+const settingsButton =
+  requiredElement<HTMLButtonElement>("#settings");
+const exitMenuButton =
+  requiredElement<HTMLButtonElement>("#exit-menu");
+const settingsBackButton =
+  requiredElement<HTMLButtonElement>("#settings-back");
+const settingsStatus =
+  requiredElement<HTMLElement>("#settings-status");
 const roomSetup = requiredElement<HTMLElement>("#room-setup");
 const roomDetails = requiredElement<HTMLElement>("#room-details");
 const roomForm = requiredElement<HTMLFormElement>("#room-form");
 const roomNameInput = requiredElement<HTMLInputElement>("#room-name");
-const createRoomButton =
-  requiredElement<HTMLButtonElement>("#create-room");
-const joinRoomButton =
-  requiredElement<HTMLButtonElement>("#join-room");
+const joinFlockButton =
+  requiredElement<HTMLButtonElement>("#join-flock");
 const leaveRoomButton =
   requiredElement<HTMLButtonElement>("#leave-room");
 const roomFeedback = requiredElement<HTMLElement>("#room-feedback");
@@ -88,10 +116,17 @@ interface PointerGesture {
   samples: Array<{ x: number; y: number; time: number }>;
 }
 
+interface MenuTarget {
+  goose: Goose;
+  profile: RemoteProfile | null;
+}
+
 let playerGoose: Goose | null = null;
 let playerUserId: string | null = null;
 let activeAttackTargetId: string | null = null;
 let multiplayer: Multiplayer | null = null;
+let lastLocalImpactSequence = 0;
+let userPreferences = { ...DEFAULT_USER_PREFERENCES };
 let canvasWidth = 0;
 let canvasHeight = 0;
 let lastFrameTime = performance.now();
@@ -103,7 +138,10 @@ let runningSoundActive = false;
 let animationActive = false;
 let currentRoomInfo: RoomInfo | null = null;
 let roomTimer: number | null = null;
-let roomPanelExpanded = true;
+let sessionMenuExpanded = false;
+let menuTarget: MenuTarget | null = null;
+let hoveredGoose: Goose | null = null;
+let pointerPollErrorLogged = false;
 
 window.addEventListener("pointerdown", unlockAudio, {
   capture: true,
@@ -207,8 +245,19 @@ async function setCursorEventsIgnored(ignore: boolean): Promise<void> {
   }
 }
 
-function playOneShot(sound: "honk" | "attack"): void {
-  const playback = sound === "honk" ? playHonkSound() : playAttackSound();
+function playOneShot(
+  sound: "honk" | "attack" | "splat",
+  broadcast = true,
+): void {
+  if (broadcast && sound !== "splat") {
+    multiplayer?.broadcastSound(sound);
+  }
+  const playback =
+    sound === "honk"
+      ? playHonkSound()
+      : sound === "attack"
+        ? playAttackSound()
+        : playSplatSound();
   void playback.catch((error: unknown) => {
     console.error(`Could not play the ${sound} sound.`, error);
   });
@@ -225,8 +274,22 @@ function syncRunningSound(): void {
     void startRunningSound().catch((error: unknown) => {
       console.error("Could not play the running sound.", error);
     });
+    multiplayer?.broadcastSound("running-start");
   } else {
     stopRunningSound();
+    multiplayer?.broadcastSound("running-stop");
+  }
+}
+
+function playRoomSound(userId: string, sound: RoomSound): void {
+  if (sound === "running-start") {
+    void startRunningSound(userId).catch((error: unknown) => {
+      console.error("Could not play a remote running sound.", error);
+    });
+  } else if (sound === "running-stop") {
+    stopRunningSound(userId);
+  } else {
+    playOneShot(sound, false);
   }
 }
 
@@ -293,10 +356,41 @@ function animate(now: number): void {
     }
   }
 
+  if (playerGoose && playerGoose.impactSequence > lastLocalImpactSequence) {
+    while (lastLocalImpactSequence < playerGoose.impactSequence) {
+      lastLocalImpactSequence += 1;
+      playOneShot("splat");
+    }
+  }
+
   multiplayer?.update(playerGoose, deltaSeconds);
   syncRunningSound();
   context.clearRect(0, 0, canvasWidth, canvasHeight);
-  renderer.draw(geese, canvasWidth);
+  if (hoveredGoose && !geese.includes(hoveredGoose)) {
+    hoveredGoose = null;
+  }
+  if (sessionMenuExpanded && menuTarget) {
+    if (!geese.includes(menuTarget.goose)) {
+      closeGooseMenu();
+    } else {
+      if (menuTarget.goose !== playerGoose) {
+        menuTarget.profile =
+          multiplayer?.getRemoteProfile(menuTarget.goose) ?? null;
+        remoteAboutMe.textContent = menuTarget.profile?.aboutMe ?? "";
+      }
+      positionSessionMenu();
+    }
+  }
+  const hiddenNameTagGoose = sessionMenuExpanded
+    ? menuTarget?.goose ?? null
+    : null;
+  renderer.draw(
+    geese,
+    canvasWidth,
+    hoveredGoose,
+    userPreferences.alwaysShowNameTags,
+    hiddenNameTagGoose,
+  );
   requestAnimationFrame(animate);
 }
 
@@ -310,21 +404,137 @@ function startAnimation(): void {
 }
 
 function setConnectionStatus(state: ConnectionState): void {
-  connectionStatus.textContent =
+  const label =
     state === "online"
       ? "Online"
       : state === "connecting"
-        ? "Connecting…"
+        ? "Connecting"
         : "Offline";
-  connectionStatus.classList.toggle("online", state === "online");
-  connectionStatus.classList.toggle("connecting", state === "connecting");
+  connectionStatus.textContent =
+    label;
+  connectionIndicator.classList.remove("online", "connecting", "offline");
+  connectionIndicator.classList.add(state);
+  connectionIndicator.setAttribute("aria-label", label);
+  connectionIndicator.setAttribute("title", label);
 }
 
-function setRoomPanelExpanded(expanded: boolean): void {
-  roomPanelExpanded = expanded;
-  roomPanel.hidden = !expanded;
-  toggleRoomPanelButton.setAttribute("aria-expanded", String(expanded));
-  toggleRoomPanelButton.textContent = expanded ? "Hide flock" : "Show flock";
+function applyUserPreferences(
+  preferences: UserPreferences,
+  forceAlwaysOnTop = false,
+): void {
+  const previousPreferences = userPreferences;
+  const alwaysOnTopChanged =
+    preferences.alwaysOnTop !== userPreferences.alwaysOnTop;
+  userPreferences = preferences;
+  if (preferences.volume !== previousPreferences.volume) {
+    setMasterVolume(preferences.volume);
+  }
+  if (preferences.muteWhenUnfocused !== previousPreferences.muteWhenUnfocused) {
+    setMuteWhenUnfocused(preferences.muteWhenUnfocused);
+  }
+  if (forceAlwaysOnTop || alwaysOnTopChanged) {
+    void overlayWindow
+      .setAlwaysOnTop(preferences.alwaysOnTop)
+      .catch((error: unknown) => {
+        const detail =
+          error instanceof Error ? error.message : "Unknown window error.";
+        settingsStatus.textContent =
+          `Could not update always-on-top setting: ${detail}`;
+        settingsStatus.classList.add("error");
+        console.error("Could not update the always-on-top setting.", error);
+      });
+  }
+}
+
+function positionSessionMenu(): void {
+  const goose = menuTarget?.goose;
+  if (sessionMenu.hidden || !goose) {
+    return;
+  }
+  const canvasBounds = petCanvas.getBoundingClientRect();
+  const menuBounds = sessionMenu.getBoundingClientRect();
+  const centerX = canvasBounds.left + goose.x + GOOSE_SIZE / 2;
+  const gooseTop = canvasBounds.top + goose.y + SPRITE_OFFSET_Y;
+  const gooseBottom = gooseTop + GOOSE_SIZE;
+  const left = Math.min(
+    Math.max(12, centerX - menuBounds.width / 2),
+    Math.max(12, window.innerWidth - menuBounds.width - 12),
+  );
+  const aboveTop = gooseTop - menuBounds.height - 12;
+  const belowTop = gooseBottom + 12;
+  const top = Math.min(
+    Math.max(12, aboveTop >= 12 ? aboveTop : belowTop),
+    Math.max(12, window.innerHeight - menuBounds.height - 12),
+  );
+  sessionMenu.style.left = `${Math.round(left)}px`;
+  sessionMenu.style.top = `${Math.round(top)}px`;
+}
+
+function setSessionMenuExpanded(
+  expanded: boolean,
+  target: MenuTarget | null = menuTarget,
+): void {
+  sessionMenuExpanded = expanded;
+  if (expanded) {
+    if (!playerGoose || !target) {
+      return;
+    }
+    settingsContent.hidden = true;
+    localMenuContent.hidden = false;
+    menuTarget = target;
+    const remote = target.goose !== playerGoose;
+    if (remote) {
+      playerGoose.setMenuOpen(false);
+    } else {
+      finishActiveAttack();
+      playerGoose.setMenuOpen(true);
+    }
+    sessionName.textContent = remote
+      ? target.profile?.username ?? target.goose.name
+      : playerGoose.name;
+    localConnectionStatus.hidden = remote;
+    localProfile.hidden = remote;
+    localMenuContent.hidden = remote;
+    remoteProfileSection.hidden = !remote;
+    if (remote) {
+      remoteAboutMe.textContent = target.profile?.aboutMe ?? "";
+    }
+  } else {
+    settingsContent.hidden = true;
+    menuTarget = null;
+    playerGoose?.setMenuOpen(false);
+  }
+  sessionMenu.hidden = !expanded;
+  if (expanded) {
+    positionSessionMenu();
+  }
+}
+
+function setSettingsView(open: boolean): void {
+  if (!sessionMenuExpanded || menuTarget?.goose !== playerGoose) {
+    return;
+  }
+  localProfile.hidden = open;
+  localMenuContent.hidden = open;
+  settingsContent.hidden = !open;
+  positionSessionMenu();
+}
+
+function openGooseMenu(goose: Goose): void {
+  if (!playerGoose) {
+    return;
+  }
+  const profile =
+    goose === playerGoose
+      ? null
+      : multiplayer?.getRemoteProfile(goose) ?? null;
+  setSessionMenuExpanded(true, { goose, profile });
+}
+
+function closeGooseMenu(): void {
+  if (sessionMenuExpanded) {
+    setSessionMenuExpanded(false);
+  }
 }
 
 function updateRoomTimer(): void {
@@ -332,7 +542,7 @@ function updateRoomTimer(): void {
     return;
   }
   const elapsedSeconds = Math.floor(
-    Math.max(0, performance.now() - currentRoomInfo.joinedAt) / 1000,
+    Math.max(0, Date.now() - currentRoomInfo.roomStartedAt) / 1000,
   );
   const minutes = Math.floor(elapsedSeconds / 60);
   const seconds = elapsedSeconds % 60;
@@ -345,13 +555,15 @@ function updateRoomTimer(): void {
 }
 
 function renderRoomInfo(info: RoomInfo | null): void {
-  const justJoined = currentRoomInfo === null && info !== null;
+  const justLeft = currentRoomInfo !== null && info === null;
   currentRoomInfo = info;
   roomSetup.hidden = info !== null;
   roomDetails.hidden = info === null;
 
   if (!info) {
-    setRoomPanelExpanded(true);
+    if (justLeft && playerGoose) {
+      openGooseMenu(playerGoose);
+    }
     roomCodeElement.textContent = "";
     roomPlayerCountElement.textContent = "";
     roomOnlineTimeElement.textContent = "00:00";
@@ -362,9 +574,6 @@ function renderRoomInfo(info: RoomInfo | null): void {
     return;
   }
 
-  if (justJoined) {
-    setRoomPanelExpanded(false);
-  }
   roomCodeElement.textContent = info.roomCode;
   roomPlayerCountElement.textContent =
     `${info.playerCount} / ${info.maxPlayers}`;
@@ -376,12 +585,12 @@ function renderRoomInfo(info: RoomInfo | null): void {
 
 function setRoomButtonsDisabled(disabled: boolean): void {
   roomNameInput.disabled = disabled;
-  createRoomButton.disabled = disabled;
-  joinRoomButton.disabled = disabled;
+  joinFlockButton.disabled = disabled;
 }
 
-async function enterRoom(mode: "create" | "join"): Promise<void> {
-  if (!multiplayer) {
+async function enterRoom(): Promise<void> {
+  const activeMultiplayer = multiplayer;
+  if (!activeMultiplayer) {
     return;
   }
 
@@ -398,11 +607,7 @@ async function enterRoom(mode: "create" | "join"): Promise<void> {
   roomFeedback.textContent = "";
   setRoomButtonsDisabled(true);
   try {
-    if (mode === "create") {
-      await multiplayer.createRoom(roomCode);
-    } else {
-      await multiplayer.joinRoom(roomCode);
-    }
+    await activeMultiplayer.joinRoom(roomCode);
   } catch (error) {
     roomFeedback.textContent =
       error instanceof Error
@@ -413,7 +618,7 @@ async function enterRoom(mode: "create" | "join"): Promise<void> {
   }
 }
 
-function startMultiplayer(user: { username: string }): void {
+function startMultiplayer(user: { username: string; aboutMe: string }): void {
   if (!playerGoose) {
     return;
   }
@@ -421,6 +626,8 @@ function startMultiplayer(user: { username: string }): void {
   multiplayer = new Multiplayer(user, {
     onConnectionChange: setConnectionStatus,
     onRoomInfoChange: renderRoomInfo,
+    onImpactSound: () => playOneShot("splat"),
+    onRoomSound: playRoomSound,
     onError: (message) => {
       roomFeedback.textContent = message;
     },
@@ -428,7 +635,6 @@ function startMultiplayer(user: { username: string }): void {
   const maxX = Math.max(0, canvasWidth - GOOSE_SIZE);
   const maxY = Math.max(0, canvasHeight - GOOSE_SIZE);
   multiplayer.setLocalGoose(playerGoose, maxX, maxY);
-  setRoomPanelExpanded(true);
   roomSetup.hidden = false;
   roomDetails.hidden = true;
   roomFeedback.textContent = "";
@@ -437,7 +643,12 @@ function startMultiplayer(user: { username: string }): void {
 
 function handleAuthenticated(
   _client: SupabaseClient,
-  user: { id: string; username: string },
+  user: {
+    id: string;
+    username: string;
+    aboutMe: string;
+    preferences: UserPreferences;
+  },
 ): void {
   if (playerUserId === user.id) {
     return;
@@ -451,36 +662,45 @@ function handleAuthenticated(
     });
   }
   playerUserId = user.id;
+  applyUserPreferences(user.preferences, true);
   const maxX = Math.max(0, canvasWidth - GOOSE_SIZE);
   playerGoose = new Goose(
     getDeterministicSpawnX(user.id, maxX),
     Math.max(0, canvasHeight - GOOSE_SIZE),
     user.username,
   );
+  lastLocalImpactSequence = playerGoose.impactSequence;
   resizeCanvas();
   startAnimation();
   startMultiplayer(user);
-  void overlayWindow.setAlwaysOnTop(true).catch((error: unknown) => {
-    console.error("Could not keep the signed-in goose window on top.", error);
-  });
+  sessionBar.hidden = false;
+  settingsContent.hidden = true;
+  localMenuContent.hidden = false;
+  openGooseMenu(playerGoose);
   void setCursorEventsIgnored(false);
 }
 
 function handleSignedOut(): void {
+  closeGooseMenu();
   finishActiveAttack();
   pointerGesture = null;
   playerGoose = null;
+  lastLocalImpactSequence = 0;
   playerUserId = null;
+  settingsContent.hidden = true;
+  localMenuContent.hidden = false;
+  applyUserPreferences(
+    { ...DEFAULT_USER_PREFERENCES, alwaysOnTop: false },
+    true,
+  );
   roomFeedback.textContent = "";
   renderRoomInfo(null);
-  roomPanel.hidden = true;
+  setSessionMenuExpanded(false);
+  hoveredGoose = null;
   stopRunningSound();
   runningSoundActive = false;
   context.clearRect(0, 0, canvasWidth, canvasHeight);
   setConnectionStatus("offline");
-  void overlayWindow.setAlwaysOnTop(false).catch((error: unknown) => {
-    console.error("Could not lower the signed-out Waddle window.", error);
-  });
   void setCursorEventsIgnored(false);
   const activeMultiplayer = multiplayer;
   multiplayer = null;
@@ -498,26 +718,45 @@ async function pollPointer(): Promise<void> {
     const localY = (cursor.y - windowPosition.y) / windowScaleFactor;
     const elementUnderPointer = document.elementFromPoint(localX, localY);
     const pointerOnUi = Boolean(elementUnderPointer?.closest(".interactive"));
+    const gooseUnderPointer = pointerOnUi
+      ? undefined
+      : findGooseAt(localX, localY);
+    hoveredGoose = gooseUnderPointer ?? null;
     const shouldIgnoreCursorEvents =
       pointerGesture === null &&
-      !findGooseAt(localX, localY) &&
+      !gooseUnderPointer &&
       !pointerOnUi;
 
     await setCursorEventsIgnored(shouldIgnoreCursorEvents);
+    pointerPollErrorLogged = false;
+  } catch (error) {
+    if (!pointerPollErrorLogged) {
+      console.error(
+        "Goose hit testing failed. Restoring normal window pointer handling.",
+        error,
+      );
+      pointerPollErrorLogged = true;
+    }
+    await setCursorEventsIgnored(false);
+  } finally {
     window.setTimeout(() => {
       void pollPointer();
     }, POINTER_POLL_INTERVAL_MS);
-  } catch (error) {
-    console.error(
-      "Goose hit testing failed. Restoring normal window pointer handling.",
-      error,
-    );
-    await setCursorEventsIgnored(false);
   }
 }
 
 async function startPointerTracking(): Promise<void> {
   try {
+    await Promise.all([
+      overlayWindow.onMoved(({ payload }) => {
+        windowPosition = payload;
+      }),
+      overlayWindow.onScaleChanged(({ payload }) => {
+        windowScaleFactor = payload.scaleFactor;
+        resizeCanvas();
+        positionSessionMenu();
+      }),
+    ]);
     const [position, scaleFactor] = await Promise.all([
       overlayWindow.outerPosition(),
       overlayWindow.scaleFactor(),
@@ -534,7 +773,7 @@ async function startPointerTracking(): Promise<void> {
 }
 
 petCanvas.addEventListener("pointerdown", (event) => {
-  if (pointerGesture || !playerGoose || event.button !== 0) {
+  if (!playerGoose) {
     return;
   }
 
@@ -543,6 +782,20 @@ petCanvas.addEventListener("pointerdown", (event) => {
   if (!goose) {
     return;
   }
+  if (event.button === 2) {
+    event.preventDefault();
+    if (sessionMenuExpanded && menuTarget?.goose === goose) {
+      closeGooseMenu();
+    } else {
+      openGooseMenu(goose);
+    }
+    void setCursorEventsIgnored(false);
+    return;
+  }
+  if (pointerGesture || event.button !== 0) {
+    return;
+  }
+  hoveredGoose = goose;
 
   pointerGesture = {
     goose,
@@ -617,6 +870,9 @@ function finishPointerGesture(event: PointerEvent, cancelled: boolean): void {
       gesture.goose.releaseFromDrag(velocity.x, velocity.y);
     }
   } else if (!cancelled) {
+    if (sessionMenuExpanded) {
+      closeGooseMenu();
+    }
     handleGooseClick(gesture.goose);
   }
   if (petCanvas.hasPointerCapture(event.pointerId)) {
@@ -634,15 +890,27 @@ petCanvas.addEventListener("lostpointercapture", (event) => {
   finishPointerGesture(event, true);
 });
 
-createRoomButton.addEventListener("click", () => {
-  void enterRoom("create");
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeGooseMenu();
+  }
 });
-toggleRoomPanelButton.addEventListener("click", () => {
-  setRoomPanelExpanded(!roomPanelExpanded);
+settingsButton.addEventListener("click", () => {
+  setSettingsView(true);
+});
+settingsBackButton.addEventListener("click", () => {
+  setSettingsView(false);
+});
+exitMenuButton.addEventListener("click", () => {
+  void overlayWindow.close().catch((error: unknown) => {
+    roomFeedback.textContent =
+      error instanceof Error ? `Could not exit: ${error.message}` : "Could not exit Waddle.";
+    console.error("Could not close the Waddle window.", error);
+  });
 });
 roomForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  void enterRoom("join");
+  void enterRoom();
 });
 leaveRoomButton.addEventListener("click", () => {
   const activeMultiplayer = multiplayer;
@@ -665,12 +933,19 @@ leaveRoomButton.addEventListener("click", () => {
 });
 
 async function initialize(): Promise<void> {
-  await document.fonts.load('bold 16px "Monocraft"');
+  await document.fonts.load('16px "Monocraft"');
   await renderer.load();
-  window.addEventListener("resize", resizeCanvas);
+  window.addEventListener("resize", () => {
+    resizeCanvas();
+    positionSessionMenu();
+  });
   resizeCanvas();
   startAuthUi({
     onAuthenticated: handleAuthenticated,
+    onSettingsChange: applyUserPreferences,
+    onAboutMeChange: (aboutMe) => {
+      multiplayer?.updateAboutMe(aboutMe);
+    },
     onSignedOut: handleSignedOut,
   });
   void startPointerTracking();

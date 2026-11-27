@@ -6,8 +6,8 @@ import {
 
 export const GOOSE_SIZE = 128;
 export const SPRITE_OFFSET_Y = 15;
-const PREFERRED_GOOSE_DISTANCE = GOOSE_SIZE + 18;
-const ATTACK_CONTACT_DISTANCE = GOOSE_SIZE - 48;
+const preferredGooseDistance = (): number => GOOSE_SIZE + 18;
+const attackContactDistance = (): number => Math.round((GOOSE_SIZE * 5) / 8);
 const ATTACK_TIMEOUT_SECONDS = 7;
 const SURPRISE_DURATION_SECONDS = ATTACK_TIMEOUT_SECONDS + 0.55;
 
@@ -32,6 +32,8 @@ const AIR_DRAG = 0.55;
 const GROUND_DRAG = 5;
 const BOUNDARY_BOUNCE = 0.35;
 const MAX_THROW_SPEED = 1500;
+const THROW_VELOCITY_THRESHOLD = 180;
+const IMPACT_SPEED_THRESHOLD = 180;
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
 
@@ -54,6 +56,7 @@ export class Goose {
   stateElapsed = 0;
   velocityX = 0;
   velocityY = 0;
+  impactSequence = 0;
   isDragging = false;
   private stateDuration = randomIdleDuration();
   private speed = 0;
@@ -66,6 +69,8 @@ export class Goose {
   private remoteDragging = false;
   private remoteTargetX: number | null = null;
   private remoteTargetY: number | null = null;
+  private menuOpen = false;
+  private thrown = false;
 
   constructor(
     x: number,
@@ -77,17 +82,23 @@ export class Goose {
   }
 
   quack(): void {
+    if (this.menuOpen) {
+      return;
+    }
     this.cancelAttack();
     this.wanderTarget = null;
     this.transition("quack", 0.85);
   }
 
   attack(target: Goose): boolean {
+    if (this.menuOpen) {
+      return false;
+    }
     this.cancelAttack();
     this.attackTarget = target;
     this.wanderTarget = null;
     this.direction = target.x >= this.x ? 1 : -1;
-    if (Math.abs(target.x - this.x) <= ATTACK_CONTACT_DISTANCE) {
+    if (Math.abs(target.x - this.x) <= attackContactDistance()) {
       this.transition("peck", 0.55);
       return true;
     }
@@ -113,6 +124,25 @@ export class Goose {
       (attacker === undefined || this.surpriseAttacker === attacker)
     ) {
       this.surpriseAttacker = null;
+      this.returnToIdle();
+    }
+  }
+
+  setMenuOpen(open: boolean): void {
+    if (this.menuOpen === open) {
+      return;
+    }
+    this.menuOpen = open;
+    if (open) {
+      if (this.state === "surprise") {
+        const attacker = this.surpriseAttacker;
+        this.surpriseAttacker = null;
+        attacker?.cancelAttack();
+      } else {
+        this.cancelAttack();
+      }
+      this.returnToIdle();
+    } else {
       this.returnToIdle();
     }
   }
@@ -176,6 +206,8 @@ export class Goose {
     this.isDragging = false;
     this.velocityX = clamp(velocityX, -MAX_THROW_SPEED, MAX_THROW_SPEED);
     this.velocityY = clamp(velocityY, -MAX_THROW_SPEED, MAX_THROW_SPEED);
+    this.thrown =
+      Math.hypot(this.velocityX, this.velocityY) >= THROW_VELOCITY_THRESHOLD;
   }
 
   resize(maxX: number, maxY: number): void {
@@ -230,67 +262,83 @@ export class Goose {
     );
     let attackLanded = false;
 
-    switch (this.state) {
-      case "idle":
-        if (this.stateElapsed >= this.stateDuration) {
-          this.startWandering(maxX);
-        }
-        break;
-      case "wandering":
-        if (
-          this.stateElapsed < this.stateDuration &&
-          this.stateElapsed + 0.02 >= this.nextAvoidanceAt
-        ) {
-          this.nextAvoidanceAt += WALK_CYCLE_SECONDS;
-          if (other) {
-            this.considerAvoidance(other, maxX);
+    if (this.menuOpen && this.state !== "surprise") {
+      this.state = "idle";
+    } else {
+      switch (this.state) {
+        case "idle":
+          if (!this.menuOpen && this.stateElapsed >= this.stateDuration) {
+            this.startWandering(maxX);
           }
-        }
-        this.moveToward(this.wanderTarget ?? this.x, deltaSeconds, maxX);
-        if (
-          this.stateElapsed >= this.stateDuration ||
-          this.wanderTarget === null
-        ) {
-          this.returnToIdle();
-        }
-        break;
-      case "attack":
-        attackLanded = this.updateAttack(deltaSeconds, maxX);
-        break;
-      case "quack":
-        if (this.stateElapsed >= this.stateDuration) {
-          this.returnToIdle();
-        }
-        break;
-      case "peck":
-        if (this.stateElapsed >= this.stateDuration) {
-          this.attackTarget?.finishSurprise();
-          this.attackTarget = null;
-          this.returnToIdle();
-        }
-        break;
-      case "surprise":
-        if (this.stateElapsed >= this.stateDuration) {
-          this.finishSurprise();
-        }
-        break;
+          break;
+        case "wandering":
+          if (
+            this.stateElapsed < this.stateDuration &&
+            this.stateElapsed + 0.02 >= this.nextAvoidanceAt
+          ) {
+            this.nextAvoidanceAt += WALK_CYCLE_SECONDS;
+            if (other) {
+              this.considerAvoidance(other, maxX);
+            }
+          }
+          this.moveToward(this.wanderTarget ?? this.x, deltaSeconds, maxX);
+          if (
+            this.stateElapsed >= this.stateDuration ||
+            this.wanderTarget === null
+          ) {
+            this.returnToIdle();
+          }
+          break;
+        case "attack":
+          attackLanded = this.updateAttack(deltaSeconds, maxX);
+          break;
+        case "quack":
+          if (this.stateElapsed >= this.stateDuration) {
+            this.returnToIdle();
+          }
+          break;
+        case "peck":
+          if (this.stateElapsed >= this.stateDuration) {
+            this.attackTarget?.finishSurprise();
+            this.attackTarget = null;
+            this.returnToIdle();
+          }
+          break;
+        case "surprise":
+          if (this.stateElapsed >= this.stateDuration) {
+            this.finishSurprise();
+          }
+          break;
+      }
     }
 
     this.velocityY += GRAVITY * deltaSeconds;
     this.y += this.velocityY * deltaSeconds;
     if (this.y < 0) {
+      if (this.thrown && Math.abs(this.velocityY) >= IMPACT_SPEED_THRESHOLD) {
+        this.impactSequence += 1;
+      }
       this.y = 0;
       this.velocityY = Math.abs(this.velocityY) * CEILING_BOUNCE;
     } else if (this.y >= floorY) {
+      if (this.thrown && Math.abs(this.velocityY) >= IMPACT_SPEED_THRESHOLD) {
+        this.impactSequence += 1;
+      }
       this.y = floorY;
       this.velocityY = 0;
     }
 
     this.x += this.velocityX * deltaSeconds;
     if (this.x < 0) {
+      if (this.thrown && Math.abs(this.velocityX) >= IMPACT_SPEED_THRESHOLD) {
+        this.impactSequence += 1;
+      }
       this.x = 0;
       this.velocityX = Math.abs(this.velocityX) * BOUNDARY_BOUNCE;
     } else if (this.x > maxX) {
+      if (this.thrown && Math.abs(this.velocityX) >= IMPACT_SPEED_THRESHOLD) {
+        this.impactSequence += 1;
+      }
       this.x = maxX;
       this.velocityX = -Math.abs(this.velocityX) * BOUNDARY_BOUNCE;
     }
@@ -302,6 +350,13 @@ export class Goose {
     if (Math.abs(this.velocityX) < 6) {
       this.velocityX = 0;
     }
+    if (
+      this.y === floorY &&
+      this.velocityY === 0 &&
+      Math.abs(this.velocityX) < THROW_VELOCITY_THRESHOLD
+    ) {
+      this.thrown = false;
+    }
 
     return attackLanded;
   }
@@ -310,12 +365,12 @@ export class Goose {
     const distance = Math.abs(other.x - this.x);
     if (
       this.avoidanceCooldown > 0 ||
-      distance >= PREFERRED_GOOSE_DISTANCE
+      distance >= preferredGooseDistance()
     ) {
       return;
     }
 
-    const closeness = 1 - distance / PREFERRED_GOOSE_DISTANCE;
+    const closeness = 1 - distance / preferredGooseDistance();
     const avoidanceProbability = 0.2 + closeness * 0.7;
     this.avoidanceCooldown = 0.45;
 
@@ -337,17 +392,25 @@ export class Goose {
 
     const distance = this.attackTarget.x - this.x;
     this.direction = distance >= 0 ? 1 : -1;
-    if (Math.abs(distance) <= ATTACK_CONTACT_DISTANCE) {
+    if (Math.abs(distance) <= attackContactDistance()) {
       this.wanderTarget = null;
       this.transition("peck", 0.55);
       return true;
     }
 
     this.moveToward(
-      this.attackTarget.x - this.direction * ATTACK_CONTACT_DISTANCE,
+      this.attackTarget.x - this.direction * attackContactDistance(),
       deltaSeconds,
       maxX,
     );
+    const remainingDistance = this.attackTarget.x - this.x;
+    if (
+      Math.abs(remainingDistance) <= attackContactDistance() ||
+      Math.sign(distance) !== Math.sign(remainingDistance)
+    ) {
+      this.transition("peck", 0.55);
+      return true;
+    }
     return false;
   }
 

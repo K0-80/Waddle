@@ -4,7 +4,7 @@ import { SPRITE_ANIMATION_FPS } from "./settings";
 type SpriteName =
   | "idle"
   | "walk"
-  | "sprint"
+  | "run"
   | "quack"
   | "peck"
   | "surprise";
@@ -17,14 +17,11 @@ interface SpriteSheet {
 }
 
 const FRAME_SIZE = 64;
-const HITBOX_EXPANSION = 30;
-const SOURCE_PIXEL_SIZE = GOOSE_SIZE / FRAME_SIZE;
-const SOURCE_HITBOX_EXPANSION = Math.ceil(HITBOX_EXPANSION / SOURCE_PIXEL_SIZE);
 
 const spriteUrls: Record<SpriteName, string> = {
   idle: new URL("./assets/sprites/idle.png", import.meta.url).href,
   walk: new URL("./assets/sprites/walk.png", import.meta.url).href,
-  sprint: new URL("./assets/sprites/sprint.png", import.meta.url).href,
+  run: new URL("./assets/sprites/run.png", import.meta.url).href,
   quack: new URL("./assets/quack.png", import.meta.url).href,
   peck: new URL("./assets/peck.png", import.meta.url).href,
   surprise: new URL("./assets/supprise.png", import.meta.url).href,
@@ -35,7 +32,7 @@ const spriteForState = (state: Goose["state"]): SpriteName => {
     return "walk";
   }
   if (state === "attack") {
-    return "sprint";
+    return "run";
   }
   if (state === "quack") {
     return "quack";
@@ -51,8 +48,16 @@ const spriteForState = (state: Goose["state"]): SpriteName => {
 
 export class GooseRenderer {
   private readonly sprites = new Map<SpriteName, SpriteSheet>();
+  private readonly nameTagCanvas = document.createElement("canvas");
+  private readonly nameTagContext: CanvasRenderingContext2D;
 
-  constructor(private readonly context: CanvasRenderingContext2D) {}
+  constructor(private readonly context: CanvasRenderingContext2D) {
+    const nameTagContext = this.nameTagCanvas.getContext("2d");
+    if (!nameTagContext) {
+      throw new Error("Could not create the goose name tag canvas.");
+    }
+    this.nameTagContext = nameTagContext;
+  }
 
   async load(): Promise<void> {
     await Promise.all(
@@ -105,7 +110,13 @@ export class GooseRenderer {
     );
   }
 
-  draw(geese: Goose[], canvasWidth: number): void {
+  draw(
+    geese: Goose[],
+    canvasWidth: number,
+    hoveredGoose: Goose | null,
+    alwaysShowNameTags = false,
+    hiddenNameTagGoose: Goose | null = null,
+  ): void {
     for (const goose of geese) {
       const spriteName = spriteForState(goose.state);
       const sprite = this.sprites.get(spriteName);
@@ -135,21 +146,31 @@ export class GooseRenderer {
         GOOSE_SIZE,
       );
       this.context.restore();
-      this.drawNameTag(goose, canvasWidth);
+      if (
+        goose !== hiddenNameTagGoose &&
+        (alwaysShowNameTags || goose === hoveredGoose)
+      ) {
+        this.drawNameTag(goose, canvasWidth);
+      }
     }
   }
 
   containsPoint(goose: Goose, x: number, y: number): boolean {
     const sprite = this.sprites.get(spriteForState(goose.state));
+    const sourcePixelSize = GOOSE_SIZE / FRAME_SIZE;
+    const hitboxExpansion = Math.round((10 * GOOSE_SIZE) / 128);
+    const sourceHitboxExpansion = Math.ceil(
+      hitboxExpansion / sourcePixelSize,
+    );
     const localX = x - goose.x;
     const localY = y - goose.y - SPRITE_OFFSET_Y;
 
     if (
       !sprite ||
-      localX < -HITBOX_EXPANSION ||
-      localX >= GOOSE_SIZE + HITBOX_EXPANSION ||
-      localY < -HITBOX_EXPANSION ||
-      localY >= GOOSE_SIZE + HITBOX_EXPANSION
+      localX < -hitboxExpansion ||
+      localX >= GOOSE_SIZE + hitboxExpansion ||
+      localY < -hitboxExpansion ||
+      localY >= GOOSE_SIZE + hitboxExpansion
     ) {
       return false;
     }
@@ -160,10 +181,10 @@ export class GooseRenderer {
       frameX = FRAME_SIZE - 1 - frameX;
     }
 
-    for (let yOffset = -SOURCE_HITBOX_EXPANSION; yOffset <= SOURCE_HITBOX_EXPANSION; yOffset += 1) {
+    for (let yOffset = -sourceHitboxExpansion; yOffset <= sourceHitboxExpansion; yOffset += 1) {
       for (
-        let xOffset = -SOURCE_HITBOX_EXPANSION;
-        xOffset <= SOURCE_HITBOX_EXPANSION;
+        let xOffset = -sourceHitboxExpansion;
+        xOffset <= sourceHitboxExpansion;
         xOffset += 1
       ) {
         const nearbyX = frameX + xOffset;
@@ -179,19 +200,19 @@ export class GooseRenderer {
 
         const displayedX =
           goose.direction === -1 ? FRAME_SIZE - 1 - nearbyX : nearbyX;
-        const pixelLeft = displayedX * SOURCE_PIXEL_SIZE;
-        const pixelTop = nearbyY * SOURCE_PIXEL_SIZE;
+        const pixelLeft = displayedX * sourcePixelSize;
+        const pixelTop = nearbyY * sourcePixelSize;
         const distanceX = Math.max(
           pixelLeft - localX,
           0,
-          localX - pixelLeft - SOURCE_PIXEL_SIZE,
+          localX - pixelLeft - sourcePixelSize,
         );
         const distanceY = Math.max(
           pixelTop - localY,
           0,
-          localY - pixelTop - SOURCE_PIXEL_SIZE,
+          localY - pixelTop - sourcePixelSize,
         );
-        if (distanceX > HITBOX_EXPANSION || distanceY > HITBOX_EXPANSION) {
+        if (distanceX > hitboxExpansion || distanceY > hitboxExpansion) {
           continue;
         }
 
@@ -219,34 +240,41 @@ export class GooseRenderer {
   }
 
   private drawNameTag(goose: Goose, canvasWidth: number): void {
-    const font = 'bold 16px "Monocraft", monospace';
-    const paddingX = 7;
-    const tagHeight = 24;
-    this.context.save();
-    this.context.font = font;
-    this.context.textAlign = "center";
-    this.context.textBaseline = "middle";
+    const font = '16px "Monocraft", monospace';
+    const paddingX = 8;
+    const tagHeight = 28;
+    this.nameTagContext.font = font;
     const tagWidth =
-      Math.ceil(this.context.measureText(goose.name).width) + paddingX * 2;
+      Math.ceil(this.nameTagContext.measureText(goose.name).width) +
+      paddingX * 2;
+    this.nameTagCanvas.width = tagWidth;
+    this.nameTagCanvas.height = tagHeight;
+    this.nameTagContext.font = font;
+    this.nameTagContext.textAlign = "center";
+    this.nameTagContext.textBaseline = "middle";
+    this.nameTagContext.fillStyle = "#fff0dc";
+    this.nameTagContext.fillRect(0, 0, tagWidth, tagHeight);
+    this.nameTagContext.strokeStyle = "#40332e";
+    this.nameTagContext.lineWidth = 2;
+    this.nameTagContext.strokeRect(1, 1, tagWidth - 2, tagHeight - 2);
+    this.nameTagContext.fillStyle = "#40332e";
+    this.nameTagContext.fillText(
+      goose.name,
+      Math.round(tagWidth / 2),
+      Math.round(tagHeight / 2),
+    );
+
     const x = Math.min(
       Math.max(0, Math.round(goose.x + GOOSE_SIZE / 2 - tagWidth / 2)),
       Math.max(0, canvasWidth - tagWidth),
     );
     const y = Math.max(
       0,
-      Math.round(goose.y + SPRITE_OFFSET_Y - tagHeight - 4),
+      Math.round(goose.y + SPRITE_OFFSET_Y - tagHeight - 8),
     );
-
-    this.context.fillStyle = "rgba(64, 51, 46, 0.9)";
-    this.context.fillRect(x, y, tagWidth, tagHeight);
-    this.context.strokeStyle = "#fffaf0";
-    this.context.strokeRect(x + 0.5, y + 0.5, tagWidth - 1, tagHeight - 1);
-    this.context.fillStyle = "#fffaf0";
-    this.context.fillText(
-      goose.name,
-      goose.x + GOOSE_SIZE / 2,
-      y + tagHeight / 2,
-    );
+    this.context.save();
+    this.context.imageSmoothingEnabled = false;
+    this.context.drawImage(this.nameTagCanvas, x, y);
     this.context.restore();
   }
 

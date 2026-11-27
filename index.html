@@ -71,72 +71,149 @@
         </form>
       </div>
     </section>
-    <section
-      id="room-panel"
-      class="room-panel interactive"
-      aria-label="Multiplayer room"
-      hidden
-    >
-      <div id="room-setup">
-        <h2>Find your flock</h2>
-        <form id="room-form">
-          <label class="room-field" for="room-name">
-            <span>Room name / code</span>
-            <input
-              id="room-name"
-              name="room-name"
-              type="text"
-              minlength="3"
-              maxlength="32"
-              autocomplete="off"
-              pattern="[A-Za-z0-9][A-Za-z0-9 _-]{1,31}"
-              placeholder="Friday-flock"
-              required
-            />
-          </label>
-          <div class="room-actions">
-            <button id="create-room" class="primary-button" type="button">
-              Create room
+    <aside id="session-bar" class="interactive" hidden>
+      <section
+        id="session-menu"
+        class="account-menu"
+        aria-label="Goose profile menu"
+        hidden
+      >
+        <header class="account-menu-header">
+          <span id="session-name"></span>
+          <span id="local-connection-status" class="connection-status">
+            <span
+              id="connection-indicator"
+              class="connection-indicator offline"
+              role="img"
+              aria-label="Offline"
+              title="Offline"
+            >⏺</span>
+            <span id="connection-status">Offline</span>
+          </span>
+        </header>
+        <section id="local-profile">
+          <div class="about-me-field">
+            <div class="about-me-label-row">
+              <label for="about-me-input">About me</label>
+              <span id="about-me-status" role="status" aria-live="polite"></span>
+            </div>
+            <textarea
+              id="about-me-input"
+              name="about-me"
+              maxlength="160"
+              rows="1"
+              placeholder="A little about you..."
+            ></textarea>
+          </div>
+        </section>
+        <section id="remote-profile" hidden>
+          <p id="remote-about-me" class="remote-about-me"></p>
+        </section>
+        <div id="local-menu-content">
+          <section
+            id="room-panel"
+            class="room-panel"
+            aria-label="Multiplayer room"
+          >
+            <div id="room-setup">
+              <h2>Find your flock</h2>
+              <form id="room-form">
+                <label class="room-field" for="room-name">
+                  <span>Room name</span>
+                  <input
+                    id="room-name"
+                    name="room-name"
+                    type="text"
+                    minlength="3"
+                    maxlength="32"
+                    autocomplete="off"
+                    pattern="[A-Za-z0-9][A-Za-z0-9 _-]{1,31}"
+                    placeholder="Waddle-Gang"
+                    required
+                  />
+                </label>
+                <div class="room-actions">
+                  <button id="join-flock" class="primary-button join-flock-button" type="submit">
+                    Join Flock!
+                  </button>
+                </div>
+              </form>
+            </div>
+            <div id="room-details" hidden>
+              <h2>In the flock</h2>
+              <div class="room-detail">
+                <span>Players</span>
+                <strong id="room-player-count">1 / 6</strong>
+              </div>
+              <div class="room-detail">
+                <span>Room code</span>
+                <code id="room-code"></code>
+              </div>
+              <div class="room-detail">
+                <span>Online for</span>
+                <time id="room-online-time">00:00</time>
+              </div>
+              <button id="leave-room" class="secondary-button" type="button">
+                Leave room
+              </button>
+            </div>
+            <p
+              id="room-feedback"
+              class="room-feedback"
+              role="status"
+              aria-live="polite"
+            ></p>
+          </section>
+          <footer class="account-menu-actions">
+            <button id="settings" class="secondary-button settings-button" type="button">
+              Settings
             </button>
-            <button id="join-room" class="secondary-button" type="submit">
-              Join room
+            <button id="exit-menu" class="secondary-button danger-button" type="button">
+              Exit
+            </button>
+          </footer>
+        </div>
+        <section id="settings-content" aria-label="Settings" hidden>
+          <h2>Settings</h2>
+          <div class="settings-fields">
+            <label class="setting-toggle">
+              <span>Always on top</span>
+              <input id="always-on-top" type="checkbox" checked />
+            </label>
+            <label class="setting-toggle">
+              <span>Mute when unfocused</span>
+              <input id="mute-unfocused" type="checkbox" />
+            </label>
+            <label class="setting-toggle">
+              <span>Always show nametags</span>
+              <input id="always-show-nametags" type="checkbox" />
+            </label>
+            <label class="setting-field" for="volume-input">
+              <span>Volume</span>
+              <span class="settings-volume">
+                <input
+                  id="volume-input"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value="1"
+                />
+                <output id="volume-value" for="volume-input">100%</output>
+              </span>
+            </label>
+          </div>
+          <p id="settings-status" role="status" aria-live="polite"></p>
+          <div class="settings-menu-actions">
+            <button id="sign-out" class="secondary-button danger-button" type="button">
+              Sign out
+            </button>
+            <button id="settings-back" class="secondary-button" type="button">
+              Back
             </button>
           </div>
-        </form>
-      </div>
-      <div id="room-details" hidden>
-        <h2>In the flock</h2>
-        <div class="room-detail">
-          <span>Players</span>
-          <strong id="room-player-count">1 / 6</strong>
-        </div>
-        <div class="room-detail">
-          <span>Room code</span>
-          <code id="room-code"></code>
-        </div>
-        <div class="room-detail">
-          <span>Online for</span>
-          <time id="room-online-time">00:00</time>
-        </div>
-        <button id="leave-room" class="secondary-button" type="button">
-          Leave room
-        </button>
-      </div>
-      <p id="room-feedback" class="room-feedback" role="status" aria-live="polite"></p>
-    </section>
-    <aside id="session-bar" class="session-bar interactive" hidden>
-      <span id="session-name"></span>
-      <span id="connection-status" class="connection-status">Offline</span>
-      <button
-        id="toggle-room-panel"
-        class="text-button"
-        type="button"
-        aria-controls="room-panel"
-        aria-expanded="true"
-      >
-        Hide flock
-      </button>
-      <button id="sign-out" class="text-button" type="button">Sign out</button>
+        </section>
+      </section>
     </aside>
   </body>
 </html>

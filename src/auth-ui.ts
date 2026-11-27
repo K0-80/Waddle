@@ -1,11 +1,18 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createSupabaseClient } from "./supabase";
+import {
+  DEFAULT_USER_PREFERENCES,
+  getUserPreferences,
+  type UserPreferences,
+} from "./settings";
 
 const USERNAME_PATTERN = /^[A-Za-z0-9_]{3,20}$/;
 
 interface AuthenticatedUser {
   id: string;
   username: string;
+  aboutMe: string;
+  preferences: UserPreferences;
 }
 
 interface AuthUiCallbacks {
@@ -13,6 +20,8 @@ interface AuthUiCallbacks {
     client: SupabaseClient,
     user: AuthenticatedUser,
   ) => void;
+  onSettingsChange: (preferences: UserPreferences) => void;
+  onAboutMeChange: (aboutMe: string) => void;
   onSignedOut: () => void;
 }
 
@@ -28,6 +37,18 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An unexpected error occurred.";
 }
 
+function getAboutMe(settings: unknown): string {
+  if (
+    typeof settings !== "object" ||
+    settings === null ||
+    !("aboutMe" in settings) ||
+    typeof settings.aboutMe !== "string"
+  ) {
+    return "";
+  }
+  return settings.aboutMe.slice(0, 160);
+}
+
 export function startAuthUi(callbacks: AuthUiCallbacks): void {
   const panel = requiredElement<HTMLElement>("#auth-panel");
   const form = requiredElement<HTMLFormElement>("#auth-form");
@@ -41,6 +62,21 @@ export function startAuthUi(callbacks: AuthUiCallbacks): void {
   const sessionBar = requiredElement<HTMLElement>("#session-bar");
   const sessionName = requiredElement<HTMLElement>("#session-name");
   const signOutButton = requiredElement<HTMLButtonElement>("#sign-out");
+  const aboutMeInput = requiredElement<HTMLTextAreaElement>("#about-me-input");
+  const aboutMeStatus = requiredElement<HTMLElement>("#about-me-status");
+  const settingsStatus = requiredElement<HTMLElement>("#settings-status");
+  const alwaysOnTopInput =
+    requiredElement<HTMLInputElement>("#always-on-top");
+  const muteUnfocusedInput =
+    requiredElement<HTMLInputElement>("#mute-unfocused");
+  const alwaysShowNameTagsInput =
+    requiredElement<HTMLInputElement>("#always-show-nametags");
+  const volumeInput = requiredElement<HTMLInputElement>("#volume-input");
+  const volumeValue = requiredElement<HTMLOutputElement>("#volume-value");
+  const resizeAboutMeInput = (): void => {
+    aboutMeInput.style.height = "auto";
+    aboutMeInput.style.height = `${aboutMeInput.scrollHeight + 4}px`;
+  };
 
   const showStatus = (message: string, isError = false): void => {
     status.textContent = message;
@@ -59,10 +95,106 @@ export function startAuthUi(callbacks: AuthUiCallbacks): void {
   let activeUserId: string | null = null;
   let latestSessionUserId: string | null = null;
   let loadingProfileUserId: string | null = null;
+  let activeProfileSettings: Record<string, unknown> = {};
+  let settingsSaveQueue: Promise<void> = Promise.resolve();
+  let aboutMeSaveTimer: number | null = null;
+  let aboutMeStatusTimer: number | null = null;
+
+  const renderUserPreferences = (preferences: UserPreferences): void => {
+    alwaysOnTopInput.checked = preferences.alwaysOnTop;
+    muteUnfocusedInput.checked = preferences.muteWhenUnfocused;
+    alwaysShowNameTagsInput.checked = preferences.alwaysShowNameTags;
+    volumeInput.value = String(preferences.volume);
+    volumeValue.value = `${Math.round(preferences.volume * 100)}%`;
+  };
+
+  const writeProfileSettings = (
+    patch: Partial<UserPreferences> & { aboutMe?: string },
+  ): Promise<void> => {
+    const userId = activeUserId;
+    if (!userId) {
+      return Promise.reject(new Error("Sign in to save your settings."));
+    }
+
+    const operation = settingsSaveQueue.then(async () => {
+      if (activeUserId !== userId) {
+        throw new Error("Your session changed before settings were saved.");
+      }
+
+      const nextSettings = { ...activeProfileSettings, ...patch };
+      const { data, error } = await client
+        .from("profiles")
+        .update({ settings: nextSettings })
+        .eq("id", userId)
+        .select("id")
+        .maybeSingle();
+      if (error) {
+        throw error;
+      }
+      if (!data) {
+        throw new Error("Your profile settings could not be updated.");
+      }
+      if (activeUserId === userId) {
+        activeProfileSettings = nextSettings;
+      }
+    });
+    settingsSaveQueue = operation.catch(() => undefined);
+    return operation;
+  };
+
+  const saveUserPreferences = async (
+    patch: Partial<UserPreferences>,
+  ): Promise<void> => {
+    callbacks.onSettingsChange({
+      ...getUserPreferences(activeProfileSettings),
+      ...patch,
+    });
+    settingsStatus.textContent = "Saving...";
+    settingsStatus.classList.remove("error");
+    try {
+      await writeProfileSettings(patch);
+      const preferences = getUserPreferences(activeProfileSettings);
+      renderUserPreferences(preferences);
+      callbacks.onSettingsChange(preferences);
+      settingsStatus.textContent = "Saved";
+    } catch (error) {
+      const preferences = getUserPreferences(activeProfileSettings);
+      renderUserPreferences(preferences);
+      callbacks.onSettingsChange(preferences);
+      settingsStatus.textContent = `Could not save settings: ${errorMessage(error)}`;
+      settingsStatus.classList.add("error");
+    }
+  };
+
+  const saveAboutMeNow = (): void => {
+    if (aboutMeSaveTimer !== null) {
+      window.clearTimeout(aboutMeSaveTimer);
+      aboutMeSaveTimer = null;
+    }
+    void saveAboutMe().catch((error: unknown) => {
+      aboutMeStatus.textContent = `Could not save: ${errorMessage(error)}`;
+      aboutMeStatus.classList.add("error");
+    });
+  };
 
   const showSignedOutUi = (): void => {
+    if (aboutMeSaveTimer !== null) {
+      window.clearTimeout(aboutMeSaveTimer);
+      aboutMeSaveTimer = null;
+    }
+    if (aboutMeStatusTimer !== null) {
+      window.clearTimeout(aboutMeStatusTimer);
+      aboutMeStatusTimer = null;
+    }
     latestSessionUserId = null;
     activeUserId = null;
+    activeProfileSettings = {};
+    renderUserPreferences(DEFAULT_USER_PREFERENCES);
+    settingsStatus.textContent = "";
+    settingsStatus.classList.remove("error");
+    aboutMeInput.value = "";
+    aboutMeStatus.textContent = "";
+    aboutMeStatus.classList.remove("error");
     panel.hidden = false;
     sessionBar.hidden = true;
     callbacks.onSignedOut();
@@ -85,7 +217,7 @@ export function startAuthUi(callbacks: AuthUiCallbacks): void {
     try {
       const { data: profile, error } = await client
         .from("profiles")
-        .select("username")
+        .select("username, settings")
         .eq("id", session.user.id)
         .maybeSingle();
 
@@ -108,14 +240,30 @@ export function startAuthUi(callbacks: AuthUiCallbacks): void {
       }
 
       activeUserId = session.user.id;
+      const settings = profile.settings;
+      activeProfileSettings =
+        typeof settings === "object" && settings !== null && !Array.isArray(settings)
+          ? { ...settings }
+          : {};
+      const aboutMe = getAboutMe(settings);
+      const preferences = getUserPreferences(settings);
       panel.hidden = true;
       sessionBar.hidden = false;
       sessionName.textContent = profile.username;
+      aboutMeInput.value = aboutMe;
+      renderUserPreferences(preferences);
+      aboutMeStatus.textContent = "";
+      aboutMeStatus.classList.remove("error");
+      settingsStatus.textContent = "";
+      settingsStatus.classList.remove("error");
       showStatus("");
       callbacks.onAuthenticated(client, {
         id: session.user.id,
         username: profile.username,
+        aboutMe,
+        preferences,
       });
+      resizeAboutMeInput();
     } finally {
       if (loadingProfileUserId === session.user.id) {
         loadingProfileUserId = null;
@@ -248,6 +396,90 @@ export function startAuthUi(callbacks: AuthUiCallbacks): void {
         showStatus(`Could not sign out: ${errorMessage(error)}`, true);
       });
   });
+
+  alwaysOnTopInput.addEventListener("change", () => {
+    void saveUserPreferences({ alwaysOnTop: alwaysOnTopInput.checked });
+  });
+  muteUnfocusedInput.addEventListener("change", () => {
+    void saveUserPreferences({
+      muteWhenUnfocused: muteUnfocusedInput.checked,
+    });
+  });
+  alwaysShowNameTagsInput.addEventListener("change", () => {
+    void saveUserPreferences({
+      alwaysShowNameTags: alwaysShowNameTagsInput.checked,
+    });
+  });
+  volumeInput.addEventListener("input", () => {
+    const volume = Number(volumeInput.value);
+    volumeValue.value = `${Math.round(volume * 100)}%`;
+    callbacks.onSettingsChange({
+      ...getUserPreferences(activeProfileSettings),
+      volume,
+    });
+  });
+  volumeInput.addEventListener("change", () => {
+    void saveUserPreferences({ volume: Number(volumeInput.value) });
+  });
+  aboutMeInput.addEventListener("input", () => {
+    resizeAboutMeInput();
+    aboutMeStatus.textContent = "";
+    aboutMeStatus.classList.remove("error");
+    if (aboutMeSaveTimer !== null) {
+      window.clearTimeout(aboutMeSaveTimer);
+    }
+    if (aboutMeStatusTimer !== null) {
+      window.clearTimeout(aboutMeStatusTimer);
+      aboutMeStatusTimer = null;
+    }
+    aboutMeSaveTimer = window.setTimeout(() => {
+      aboutMeSaveTimer = null;
+      saveAboutMeNow();
+    }, 500);
+  });
+  aboutMeInput.addEventListener("blur", () => {
+    if (aboutMeSaveTimer !== null) {
+      saveAboutMeNow();
+    }
+  });
+
+  async function saveAboutMe(): Promise<void> {
+    if (!activeUserId) {
+      return;
+    }
+
+    const userId = activeUserId;
+    const aboutMe = aboutMeInput.value.trim();
+    if (aboutMe.length > 160) {
+      aboutMeStatus.textContent = "About Me must be 160 characters or fewer.";
+      aboutMeStatus.classList.add("error");
+      return;
+    }
+
+    if (aboutMe === getAboutMe(activeProfileSettings)) {
+      aboutMeStatus.textContent = "";
+      return;
+    }
+
+    aboutMeStatus.classList.remove("error");
+    aboutMeStatus.textContent = "Saving...";
+    await writeProfileSettings({ aboutMe });
+    if (activeUserId !== userId) {
+      return;
+    }
+
+    callbacks.onAboutMeChange(aboutMe);
+    if (aboutMeInput.value.trim() === aboutMe) {
+      aboutMeStatus.textContent = "Saved";
+      if (aboutMeStatusTimer !== null) {
+        window.clearTimeout(aboutMeStatusTimer);
+      }
+      aboutMeStatusTimer = window.setTimeout(() => {
+        aboutMeStatus.textContent = "";
+        aboutMeStatusTimer = null;
+      }, 1500);
+    }
+  }
 
   window.addEventListener("beforeunload", () => {
     subscription.unsubscribe();

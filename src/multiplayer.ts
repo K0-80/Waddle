@@ -20,27 +20,35 @@ export interface RoomInfo {
   roomCode: string;
   playerCount: number;
   maxPlayers: number;
-  joinedAt: number;
+  roomStartedAt: number;
 }
 
 interface GooseAction {
   username: string;
+  aboutMe: string;
+  isHost: boolean;
+  joinedAt: number;
   direction: -1 | 1;
   state: GooseState;
   stateElapsed: number;
   duration: number;
+  roomStartedAt: number;
   xRatio: number;
   yRatio: number;
   dragging: boolean;
   sequence: number;
   actionSequence: number;
+  impactSequence: number;
   targetUserId: string | null;
 }
 
 interface RemotePlayer {
   goose: Goose;
+  aboutMe: string;
+  joinedAt: number;
   sequence: number;
   actionSequence: number;
+  impactSequence: number;
 }
 
 interface PendingAction {
@@ -51,6 +59,12 @@ interface PendingAction {
 
 interface MultiplayerUser {
   username: string;
+  aboutMe: string;
+}
+
+export interface RemoteProfile {
+  username: string;
+  aboutMe: string;
 }
 
 interface AttackRequest {
@@ -58,9 +72,13 @@ interface AttackRequest {
   phase: "start" | "finish";
 }
 
+export type RoomSound = "honk" | "attack" | "running-start" | "running-stop";
+
 interface MultiplayerCallbacks {
   onConnectionChange: (state: ConnectionState) => void;
   onRoomInfoChange: (info: RoomInfo | null) => void;
+  onImpactSound: () => void;
+  onRoomSound: (userId: string, sound: RoomSound) => void;
   onError: (message: string) => void;
 }
 
@@ -85,20 +103,32 @@ function parseAction(value: unknown): GooseAction | null {
   }
   const {
     username,
+    aboutMe,
+    isHost,
+    joinedAt,
     direction,
     state,
     stateElapsed,
     duration,
+    roomStartedAt,
     xRatio,
     yRatio,
     dragging,
     sequence,
     actionSequence,
+    impactSequence: rawImpactSequence,
     targetUserId,
   } = value;
+  const impactSequence = rawImpactSequence ?? 0;
   if (
     typeof username !== "string" ||
     !USERNAME_PATTERN.test(username) ||
+    typeof aboutMe !== "string" ||
+    aboutMe.length > 160 ||
+    typeof isHost !== "boolean" ||
+    typeof joinedAt !== "number" ||
+    !Number.isSafeInteger(joinedAt) ||
+    joinedAt <= 0 ||
     (direction !== -1 && direction !== 1) ||
     !isGooseState(state) ||
     typeof stateElapsed !== "number" ||
@@ -108,6 +138,9 @@ function parseAction(value: unknown): GooseAction | null {
     !Number.isFinite(duration) ||
     duration < 0 ||
     duration > 60 ||
+    typeof roomStartedAt !== "number" ||
+    !Number.isFinite(roomStartedAt) ||
+    roomStartedAt <= 0 ||
     typeof xRatio !== "number" ||
     !Number.isFinite(xRatio) ||
     xRatio < 0 ||
@@ -123,6 +156,9 @@ function parseAction(value: unknown): GooseAction | null {
     typeof actionSequence !== "number" ||
     !Number.isSafeInteger(actionSequence) ||
     actionSequence < 0 ||
+    typeof impactSequence !== "number" ||
+    !Number.isSafeInteger(impactSequence) ||
+    impactSequence < 0 ||
     (targetUserId !== null &&
       (typeof targetUserId !== "string" ||
         targetUserId.length < 8 ||
@@ -133,15 +169,20 @@ function parseAction(value: unknown): GooseAction | null {
 
   return {
     username,
+    aboutMe,
+    isHost,
+    joinedAt,
     direction,
     state,
     stateElapsed: Math.min(stateElapsed, duration),
     duration,
+    roomStartedAt,
     xRatio,
     yRatio,
     dragging,
     sequence,
     actionSequence,
+    impactSequence,
     targetUserId,
   };
 }
@@ -162,9 +203,12 @@ export class Multiplayer {
   private room: Room | null = null;
   private actionState: UserState<GooseAction> | null = null;
   private attackAction: MessageAction<AttackRequest> | null = null;
+  private soundAction: MessageAction<RoomSound> | null = null;
+  private readonly runningSoundUsers = new Set<string>();
   private pendingAction: PendingAction | null = null;
   private actionPublishInFlight = false;
   private selfUserId: string | null = null;
+  private joinedAt = 0;
   private localGoose: Goose | null = null;
   private maxX = 0;
   private maxY = 0;
@@ -176,7 +220,7 @@ export class Multiplayer {
   private lastAttackAt = Number.NEGATIVE_INFINITY;
   private localAttackTargetId: string | null = null;
   private roomCode: string | null = null;
-  private joinedAt = 0;
+  private roomStartedAt = 0;
   private state: ConnectionState = "offline";
 
   constructor(
@@ -206,6 +250,36 @@ export class Multiplayer {
     return Array.from(this.remotePlayers.entries()).find(
       ([, player]) => player.goose === goose,
     )?.[0];
+  }
+
+  getRemoteProfile(goose: Goose): RemoteProfile | undefined {
+    const player = Array.from(this.remotePlayers.values()).find(
+      (candidate) => candidate.goose === goose,
+    );
+    return player
+      ? {
+          username: player.goose.name,
+          aboutMe: player.aboutMe,
+        }
+      : undefined;
+  }
+
+  updateAboutMe(aboutMe: string): void {
+    if (aboutMe.length > 160) {
+      throw new Error("About Me must be 160 characters or fewer.");
+    }
+    this.user.aboutMe = aboutMe;
+  }
+
+  broadcastSound(sound: RoomSound): void {
+    const soundAction = this.soundAction;
+    if (!soundAction || this.state !== "online") {
+      return;
+    }
+
+    void soundAction.send(sound).catch((error: unknown) => {
+      console.error(`Could not broadcast the ${sound} sound event.`, error);
+    });
   }
 
   requestAttack(targetUserId: string): boolean {
@@ -262,10 +336,13 @@ export class Multiplayer {
     this.room = null;
     this.actionState = null;
     this.attackAction = null;
+    this.soundAction = null;
     this.selfUserId = null;
-    this.roomCode = null;
     this.joinedAt = 0;
+    this.roomCode = null;
+    this.roomStartedAt = 0;
     this.localAttackTargetId = null;
+    this.stopRemoteRunningSounds();
     this.remotePlayers.clear();
     this.incomingAttackTimes.clear();
     this.localActionSequence = 0;
@@ -303,7 +380,7 @@ export class Multiplayer {
     this.callbacks.onError("");
     this.setState("connecting");
     this.roomCode = roomCode;
-    this.joinedAt = 0;
+    this.roomStartedAt = Date.now();
 
     let room: Room | null = null;
     try {
@@ -328,6 +405,7 @@ export class Multiplayer {
         return;
       }
       this.selfUserId = self.userId;
+      this.joinedAt = Date.now();
       const initialAction = this.makeAction(this.localGoose);
       this.actionState = activeRoom.makeUserState<GooseAction>(
         "goose-action",
@@ -356,6 +434,21 @@ export class Multiplayer {
         }
       });
 
+      const soundAction = activeRoom.makeAction<RoomSound>("goose-sound");
+      this.soundAction = soundAction;
+      soundAction.onMessage((sound, context) => {
+        if (
+          this.room === activeRoom &&
+          context.userId !== this.selfUserId &&
+          (sound === "honk" ||
+            sound === "attack" ||
+            sound === "running-start" ||
+            sound === "running-stop")
+        ) {
+          this.receiveRoomSound(context.userId, sound);
+        }
+      });
+
       activeRoom.onUserJoin(
         () => {
           if (this.room === activeRoom) {
@@ -377,7 +470,6 @@ export class Multiplayer {
       }
 
       this.lastActionPublishedAt = performance.now();
-      this.joinedAt = performance.now();
       this.setState("online");
       this.updatePlayerCount(activeRoom);
     } catch (error) {
@@ -385,9 +477,12 @@ export class Multiplayer {
         this.room = null;
         this.actionState = null;
         this.attackAction = null;
+        this.soundAction = null;
         this.selfUserId = null;
-        this.roomCode = null;
         this.joinedAt = 0;
+        this.roomCode = null;
+        this.roomStartedAt = 0;
+        this.stopRemoteRunningSounds();
         this.remotePlayers.clear();
         this.incomingAttackTimes.clear();
         this.callbacks.onRoomInfoChange(null);
@@ -405,6 +500,7 @@ export class Multiplayer {
       } else if (!room) {
         this.roomCode = null;
         this.joinedAt = 0;
+        this.roomStartedAt = 0;
         this.callbacks.onRoomInfoChange(null);
         this.setState("offline");
       }
@@ -463,7 +559,7 @@ export class Multiplayer {
       roomCode: this.roomCode,
       playerCount,
       maxPlayers: MAX_ROOM_PLAYERS,
-      joinedAt: this.joinedAt,
+      roomStartedAt: this.roomStartedAt,
     });
   }
 
@@ -474,6 +570,7 @@ export class Multiplayer {
     }
 
     let remotePlayer = this.remotePlayers.get(userId);
+    let isNewPlayer = false;
     if (!remotePlayer || remotePlayer.goose.name !== action.username) {
       remotePlayer = {
         goose: new Goose(
@@ -481,10 +578,14 @@ export class Multiplayer {
           action.yRatio * this.maxY,
           action.username,
         ),
+        aboutMe: action.aboutMe,
+        joinedAt: action.joinedAt,
         sequence: -1,
         actionSequence: -1,
+        impactSequence: action.impactSequence,
       };
       this.remotePlayers.set(userId, remotePlayer);
+      isNewPlayer = true;
     }
     if (action.sequence < remotePlayer.sequence) {
       return;
@@ -493,10 +594,32 @@ export class Multiplayer {
       return;
     }
 
+    if (
+      action.roomStartedAt < this.roomStartedAt ||
+      this.roomStartedAt === 0
+    ) {
+      this.roomStartedAt = action.roomStartedAt;
+      if (this.room) {
+        this.updatePlayerCount(this.room);
+      }
+    }
+
     const actionRestarted =
       action.actionSequence > remotePlayer.actionSequence;
+    if (!isNewPlayer && action.impactSequence > remotePlayer.impactSequence) {
+      const newImpacts = Math.min(
+        action.impactSequence - remotePlayer.impactSequence,
+        2,
+      );
+      for (let impact = 0; impact < newImpacts; impact += 1) {
+        this.callbacks.onImpactSound();
+      }
+    }
     remotePlayer.sequence = action.sequence;
     remotePlayer.actionSequence = action.actionSequence;
+    remotePlayer.impactSequence = action.impactSequence;
+    remotePlayer.aboutMe = action.aboutMe;
+    remotePlayer.joinedAt = action.joinedAt;
     const x = action.xRatio * this.maxX;
     const y = action.yRatio * this.maxY;
     remotePlayer.goose.applyRemoteAction(
@@ -516,6 +639,30 @@ export class Multiplayer {
   private removeRemotePlayer(userId: string): void {
     this.remotePlayers.delete(userId);
     this.incomingAttackTimes.delete(userId);
+    if (this.runningSoundUsers.delete(userId)) {
+      this.callbacks.onRoomSound(userId, "running-stop");
+    }
+  }
+
+  private receiveRoomSound(userId: string, sound: RoomSound): void {
+    if (sound === "running-start") {
+      if (this.runningSoundUsers.has(userId)) {
+        return;
+      }
+      this.runningSoundUsers.add(userId);
+    } else if (sound === "running-stop") {
+      if (!this.runningSoundUsers.delete(userId)) {
+        return;
+      }
+    }
+    this.callbacks.onRoomSound(userId, sound);
+  }
+
+  private stopRemoteRunningSounds(): void {
+    for (const userId of this.runningSoundUsers) {
+      this.callbacks.onRoomSound(userId, "running-stop");
+    }
+    this.runningSoundUsers.clear();
   }
 
   private receiveAttack(attackerUserId: string, value: unknown): void {
@@ -631,18 +778,37 @@ export class Multiplayer {
     this.localActionSequence += 1;
     this.lastObservedSignature = signature;
     this.lastObservedElapsed = goose.stateElapsed;
+    const localUserId = this.selfUserId;
+    const hostParticipant = [
+      ...(localUserId && this.joinedAt > 0
+        ? [{ userId: localUserId, joinedAt: this.joinedAt }]
+        : []),
+      ...Array.from(this.remotePlayers.entries(), ([userId, player]) => ({
+        userId,
+        joinedAt: player.joinedAt,
+      })),
+    ].sort(
+      (first, second) =>
+        first.joinedAt - second.joinedAt ||
+        first.userId.localeCompare(second.userId),
+    )[0];
 
     return {
       username: this.user.username,
+      aboutMe: this.user.aboutMe,
+      isHost: hostParticipant?.userId === localUserId,
+      joinedAt: this.joinedAt,
       direction: goose.direction,
       state: goose.state,
       stateElapsed: goose.stateElapsed,
       duration: goose.getActionDuration(),
+      roomStartedAt: this.roomStartedAt,
       xRatio: this.maxX > 0 ? goose.x / this.maxX : 0,
       yRatio: this.maxY > 0 ? goose.y / this.maxY : 1,
       dragging: goose.isDragging,
       sequence: this.localActionSequence,
       actionSequence: this.localActionVersion,
+      impactSequence: goose.impactSequence,
       targetUserId,
     };
   }
