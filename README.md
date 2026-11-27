@@ -20,7 +20,7 @@ Waddle is a tiny goose that lives on your desktop while you study. Enter a room 
 </table>
 
 
-todo:
+<h2>todo: </h2>
 - launch on startup setting?
 - hat cosmetics?
 - buy a proper backend  server?
