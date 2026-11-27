@@ -14,18 +14,28 @@ const ATTACK_COOLDOWN_MS = 650;
 const SYNC_INTERVAL_MS = 50;
 const USERNAME_PATTERN = /^[A-Za-z0-9_]{3,20}$/;
 const ROOM_CODE_PATTERN = /^[a-z0-9][a-z0-9_-]{2,31}$/;
-
 function getTurnConfig(): TurnServerConfig[] {
-  const rawUrls: unknown = import.meta.env.VITE_TURN_URLS;
-  const rawUsername: unknown = import.meta.env.VITE_TURN_USERNAME;
-  const rawCredential: unknown = import.meta.env.VITE_TURN_CREDENTIAL;
-  const urls =
-    typeof rawUrls === "string"
+  const rawUrls: unknown = [
+    "turn:global.relay.metered.ca:80",
+    "turn:global.relay.metered.ca:80?transport=tcp",
+    "turn:global.relay.metered.ca:443",
+    "turns:global.relay.metered.ca:443?transport=tcp",
+  ];
+  const rawUsername: unknown = "e5caa5059e59705f42502b7a";
+  const rawCredential: unknown = "BpO9i1KdZE2cXoIJ";
+
+  const urls = Array.isArray(rawUrls)
+    ? rawUrls
+        .filter((url): url is string => typeof url === "string")
+        .map((url) => url.trim())
+        .filter((url) => url.length > 0)
+    : typeof rawUrls === "string"
       ? rawUrls
           .split(",")
           .map((url) => url.trim())
           .filter((url) => url.length > 0)
       : [];
+
   const username = typeof rawUsername === "string" ? rawUsername.trim() : "";
   const credential =
     typeof rawCredential === "string" ? rawCredential.trim() : "";
