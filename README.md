@@ -1,7 +1,11 @@
-# Waddle
+<h1>
+<img width="64" height="64" alt="image" src="https://github.com/user-attachments/assets/53e098b5-512e-4e4e-b956-6b3dc6f16d9b" />
+   &nbsp;Waddle
+</h1>
 
-A tiny flock of geese that lives on your screen while you pretend to study. Sign in
-to see your goose alongside other online Waddle users.
+A tiny goose that lives on your screen while you pretend to study. Sign in to see your goose alongside other online Waddle users in REAL TIME!
+<img width="441" height="586" alt="{A5E9B5BD-3A11-4AFF-8994-7DA51D2862B4}" src="https://github.com/user-attachments/assets/e2eec25a-7b4a-47db-8eb0-23b7ec84df46" />
+
 
 ## How it works
 
